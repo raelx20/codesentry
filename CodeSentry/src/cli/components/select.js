@@ -85,7 +85,7 @@ function renderSelectView({ label, items, activeIndex, width = 76, title = 'SELE
   });
 
   const hints = theme.hintLine(
-    ['[↑/↓] Navigate', '[Enter] Select', '[Ctrl+C] Exit'],
+    ['[Tab/↑/↓] Navigate', '[Enter] Select', '[Esc] Close', '[Ctrl+C] Exit'],
     width
   );
 
@@ -177,8 +177,17 @@ function Select(props = {}) {
         process.exit(0);
       }
 
-      // Up arrow or 'k'
-      if (key.name === 'up' || key.name === 'k') {
+      // Escape -> close menu without selection
+      if (key.name === 'escape') {
+        cleanup();
+        erasePrevious();
+        if (onSelect) onSelect(null);
+        resolve(null);
+        return;
+      }
+
+      // Shift+Tab or Up arrow or 'k'
+      if ((key.name === 'tab' && key.shift) || key.name === 'up' || key.name === 'k') {
         let next = activeIndex - 1;
         if (next < 0) next = normalized.length - 1;
         while (normalized[next].disabled && next !== activeIndex) {
@@ -190,8 +199,8 @@ function Select(props = {}) {
         return;
       }
 
-      // Down arrow or 'j'
-      if (key.name === 'down' || key.name === 'j') {
+      // Tab or Down arrow or 'j'
+      if (key.name === 'tab' || key.name === 'down' || key.name === 'j') {
         let next = activeIndex + 1;
         if (next >= normalized.length) next = 0;
         while (normalized[next].disabled && next !== activeIndex) {
@@ -220,11 +229,149 @@ function Select(props = {}) {
   });
 }
 
+/**
+ * Post-Scan Tab-Triggered Action Prompt
+ *
+ * Displays a clean prompt bar inviting the user to press [Tab] to reveal the dropdown actions.
+ * Only opens the interactive Select dropdown when [Tab] is pressed in the terminal.
+ */
+function promptActionOnTab({
+  selectProps = {},
+  defaultAction = 'rescan',
+  rightTitle = 'press Tab for menu',
+  summaryLabel = null,
+} = {}) {
+  // If not running in an interactive TTY, return default immediately
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return Promise.resolve(defaultAction);
+  }
+
+  return new Promise((resolve) => {
+    const c = theme.colors;
+    let previousLineCount = 0;
+
+    readline.emitKeypressEvents(process.stdin);
+    const wasRaw = process.stdin.isRaw;
+    try {
+      process.stdin.setRawMode(true);
+    } catch {}
+
+    process.stdout.write('\x1b[?25l');
+
+    function eraseBar() {
+      if (previousLineCount > 0) {
+        process.stdout.write(`\x1b[${previousLineCount}A\r\x1b[0J`);
+        previousLineCount = 0;
+      }
+    }
+
+    function renderBar() {
+      eraseBar();
+      const lines = [];
+      const promptLine = `  ${c.cyan('⌨')}  ${c.brightWhite(theme.bold('Press [Tab]'))} ${c.lightGray('to open Actions & Fixes')}   ${c.darkGray('·')}   ${c.brightWhite(theme.bold('[Enter]'))} ${c.lightGray('Rescan')}   ${c.darkGray('·')}   ${c.darkGray('[q] Exit')}`;
+      lines.push(promptLine);
+      if (summaryLabel) {
+        lines.push(`     ${c.gray(summaryLabel)}`);
+      }
+
+      const barCard = theme.card(lines, {
+        title: c.cyan(theme.bold('READY')),
+        rightTitle: c.gray(rightTitle),
+        width: selectProps.width || 76,
+      });
+
+      const output = `\n${barCard}\n`;
+      previousLineCount = output.split('\n').length - 1;
+      process.stdout.write(output);
+    }
+
+    function cleanup() {
+      try {
+        process.stdin.removeListener('keypress', onKeypress);
+        if (process.stdin.setRawMode && !wasRaw) {
+          process.stdin.setRawMode(false);
+        }
+      } catch {}
+      process.stdout.write('\x1b[?25h');
+    }
+
+    async function openDropdown() {
+      cleanup();
+      eraseBar();
+
+      // Launch full Select dropdown
+      const choice = await Select({
+        ...selectProps,
+      });
+
+      // If user closed with Esc (choice === null), re-render the waiting bar
+      if (choice === null) {
+        readline.emitKeypressEvents(process.stdin);
+        try {
+          process.stdin.setRawMode(true);
+        } catch {}
+        process.stdout.write('\x1b[?25l');
+        process.stdin.on('keypress', onKeypress);
+        renderBar();
+        return;
+      }
+
+      resolve(choice);
+    }
+
+    function onKeypress(str, key) {
+      if (!key) return;
+
+      // Ctrl+C or 'q' to exit
+      if ((key.ctrl && key.name === 'c') || key.name === 'q') {
+        cleanup();
+        eraseBar();
+        process.stdout.write('\n');
+        process.exit(0);
+      }
+
+      // Tab -> Open the dropdown menu!
+      if (key.name === 'tab') {
+        openDropdown();
+        return;
+      }
+
+      // Enter -> Direct rescan
+      if (key.name === 'return' || key.name === 'enter') {
+        cleanup();
+        eraseBar();
+        resolve(defaultAction);
+        return;
+      }
+
+      // 'f' or 'F' -> Fast Auto-Fix shortcut
+      if (str === 'f' || str === 'F') {
+        cleanup();
+        eraseBar();
+        resolve('apply_improvements');
+        return;
+      }
+
+      // 'r' or 'R' -> Fast Rescan shortcut
+      if (str === 'r' || str === 'R') {
+        cleanup();
+        eraseBar();
+        resolve('rescan');
+        return;
+      }
+    }
+
+    process.stdin.on('keypress', onKeypress);
+    renderBar();
+  });
+}
+
 // Attach static helper for Promise usage
 Select.prompt = Select;
 
 module.exports = {
   Select,
+  promptActionOnTab,
   normalizeOptions,
   renderSelectView,
 };

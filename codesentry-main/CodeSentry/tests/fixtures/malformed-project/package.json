@@ -1,9 +1,0 @@
-{
-  "name": "malformed-project",
-  "version": "1.0.0",
-  "description": "A project with malformed code",
-  "main": "malformed.js",
-  "scripts": {
-    "start": "node malformed.js"
-  }
-}

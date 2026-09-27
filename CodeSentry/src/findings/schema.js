@@ -29,7 +29,7 @@ const REVERSE_CATEGORY_MAP = {
   'resources': 'resource',
 };
 
-const TOOLS = ['eslint', 'typescript', 'ruff', 'bandit', 'semgrep', 'codesentry', 'ai'];
+const TOOLS = ['eslint', 'typescript', 'ruff', 'bandit', 'semgrep', 'codesentry', 'ai', 'deployguard', 'modelshield'];
 const CONFIDENCES = ['high', 'medium', 'low'];
 
 function mapCategory(category) {
@@ -54,6 +54,7 @@ function createFinding({
   line = null,
   column = null,
   rule = null,
+  ruleId = null,
   message,
   suggestedFix = null,
   confidence = 'medium',
@@ -84,7 +85,8 @@ function createFinding({
   // Normalize category to new format
   const normalizedCategory = mapCategory(category);
 
-  const id = generateId(tool, file, normalLine, rule);
+  const resolvedRule = rule || ruleId || null;
+  const id = generateId(tool, file, normalLine, resolvedRule);
   const fingerprint = generateFingerprint(file, normalLine, normalizedCategory);
 
   return {
@@ -96,12 +98,13 @@ function createFinding({
     file,
     line: normalLine,
     column: normalColumn,
-    rule,
+    rule: resolvedRule,
+    ruleId: resolvedRule,
     message,
     suggestedFix,
     confidence,
     fingerprint,
-    source: source || { tool, ruleId: rule, analyzerVersion: null },
+    source: source || { tool, ruleId: resolvedRule, analyzerVersion: null },
   };
 }
 

@@ -14,7 +14,7 @@
 | **Dual-Tier SAST Resilience** | Combines external CLI linters (`eslint`, `tsc`, `ruff`, `bandit`, `semgrep`) with native built-in analyzers (`security.js`, `bugs.js`, `efficiency.js`, `resources.js`). | Even on a fresh machine with zero linters installed, CodeSentry provides 100% functional security and bug analysis out-of-the-box. |
 | **Contextual AI Fallback Chaining** | OpenRouter integration with automated model cascading (`Laguna S 2.1` ➔ `Nemotron 3 Ultra` ➔ `MiniMax` ➔ `Auto` ➔ Offline Mock Mode). | Zero downtime. If a remote model is rate-limited or the network is offline, analysis degrades gracefully without crashing. |
 | **Safe Atomic Remediation** | 72-column color-coded diff previews (`- red` / `+ green`) with mandatory user approval before applying disk writes, followed by automatic rescan verification. | No accidental file corruption or hallucinated destructive edits. |
-| **Terminal-Native Aesthetic** | Custom ANSI theme engine inspired by OpenCode with typewriter progress, pulsing status indicators, and OSC-8 clickable file links. | High-fidelity, premium developer experience in any modern terminal. |
+| **Terminal-Native Aesthetic** | Custom ANSI theme engine with typewriter progress, pulsing status indicators, chunky ASCII branding, and OSC-8 clickable file links. | High-fidelity, premium developer experience in any modern terminal. |
 
 ---
 
@@ -349,7 +349,7 @@ createConfig({ projectPath: '.', severityThreshold: 'HIGH' })
   │      └──> { status: 'WARN', message: 'Codebase has moderate issues...' }
   │
   ├──> formatSummary() & formatFindings()
-  │      └──> Render OpenCode ANSI terminal cards
+  │      └──> Render CodeSentry ANSI terminal cards
   │
   ├──> createReportGenerator().generate()
   │      └──> Writes CODESENTRY-AUDIT-2026-09-08T04-20-00.md
@@ -417,7 +417,7 @@ code_inspection_tool/
     │       ├── output.js              # Output stream router (TTY vs JSON stream)
     │       ├── progress.js            # Animated typewriter progress tracker with status indicators
     │       ├── report.js              # Markdown audit report file generator
-    │       ├── theme.js               # OpenCode-inspired color palette, card boxes, and OSC-8 links
+    │       ├── theme.js               # CodeSentry dark-mode color palette, card boxes, and OSC-8 links
     │       └── components/
     │           ├── select.js          # Interactive keyboard-navigable list selector
     │           ├── status-indicator.js# Status dots and pulsing spinner frames

@@ -4,6 +4,8 @@ const { analyzeBugs } = require('./bugs');
 const { analyzeEfficiency } = require('./efficiency');
 const { analyzeResources } = require('./resources');
 const { analyzeSecurity } = require('./security');
+const { analyzeModelShield } = require('./modelshield');
+const { analyzeDeployGuard } = require('./deployguard');
 
 const ANALYZERS = [
   { name: 'security', analyze: analyzeSecurity },
@@ -57,6 +59,46 @@ async function runCustomAnalyzers(discoveryResult, config = {}) {
         // Skip analyzer failures for individual files
       }
     }
+  }
+
+  // ModelShield: AI / LLM / Agent Security
+  try {
+    const modelShieldFindings = analyzeModelShield(allFiles, projectPath);
+    for (const f of modelShieldFindings) {
+      rawResults.push({
+        file: f.file,
+        line: f.line,
+        column: f.column,
+        rule: f.ruleId || f.rule,
+        message: f.message,
+        severity: f.severity,
+        category: f.category || 'security',
+        suggestedFix: f.suggestedFix || null,
+        analyzer: 'modelshield',
+      });
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // DeployGuard: Build, Runtime, Containers & Config Security
+  try {
+    const deployGuardFindings = analyzeDeployGuard(allFiles, projectPath);
+    for (const f of deployGuardFindings) {
+      rawResults.push({
+        file: f.file,
+        line: f.line,
+        column: f.column,
+        rule: f.ruleId || f.rule,
+        message: f.message,
+        severity: f.severity,
+        category: f.category || 'security',
+        suggestedFix: f.suggestedFix || null,
+        analyzer: 'deployguard',
+      });
+    }
+  } catch {
+    // Non-fatal
   }
 
   return {

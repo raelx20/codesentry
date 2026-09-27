@@ -98,13 +98,42 @@ class ScanResultFormatter {
       cardLines.push(`${colors.gray('Categories:')}  ${catPills.join('  ')}`);
     }
 
+    // AutoGrad Risk Intelligence & Self-Learning Telemetry
+    if (result.autograd) {
+      cardLines.push('');
+      const ag = result.autograd;
+      const trendStr = ag.trend ? colors.cyan(ag.trend.symbol) : '';
+      cardLines.push(
+        `${colors.gray('AutoGrad:')} ${bold(colors.magenta(`Grade ${ag.grade}`))} (${colors.white(String(ag.score))}/100) ${trendStr}   ` +
+        (ag.offlineResolvableCount > 0 ? bold(colors.green(`⚡ ${ag.offlineResolvableCount} Offline-Resolvable`)) : '')
+      );
+    }
+
+    // DeployGuard Production Readiness Gate
+    if (result.deployguard) {
+      const dg = result.deployguard;
+      const statusColor = dg.status === 'PASSED' ? colors.green : dg.status === 'WARNING' ? colors.yellow : colors.red;
+      cardLines.push(
+        `${colors.gray('DeployGuard:')} ${statusColor(bold(dg.status))} (Readiness: ${colors.white(String(dg.readinessScore))}%)   ` +
+        `${colors.gray('Blockers:')} ${dg.metrics.blockers > 0 ? colors.red(bold(String(dg.metrics.blockers))) : colors.green('0')}`
+      );
+    }
+
     const renderedCard = card(cardLines, {
       title: colors.cyan(bold('SCAN SUMMARY')),
       rightTitle: colors.gray(`${aggregation.total} findings`),
       width: 76,
     });
 
-    return [renderedCard];
+    const outputCards = [renderedCard];
+
+    // AttackGraph Exploitable Paths Card
+    if (result.riskGraph && result.riskGraph.terminalOutput) {
+      outputCards.push('');
+      outputCards.push(result.riskGraph.terminalOutput);
+    }
+
+    return outputCards;
   }
 
   formatFindings(findings, options = {}) {

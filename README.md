@@ -63,6 +63,30 @@ When a codebase is clean (**0 vulnerabilities / 0 bugs / perfect**):
 - **`codesentry auth`**: Dedicated dashboard to view masked keys (`sk-or-v1-••••••••••••9339`), update tokens, or toggle between AI models.
 - **`codesentry model`**: Select from top-tier free AI models (`poolside/laguna-s-2.1:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`, `minimax/minimax-m2.5:free`, etc.) with changes persisted globally.
 
+### 5. 📊 AutoGrad: Continuous Risk Grading & Offline Self-Learning
+- **Continuous Grade**: Computes unified security & quality grade (`A+`, `A`, `B`, `C`, `D`, `F`) and 0–100 score weighted across security, bugs, efficiency, and resource risks.
+- **Historical Trend Tracking**: Compares against previous scans (`▲ +4% improved`, `▼ -2% degraded`) persisted locally in `~/.codesentry/autograd-history.json`.
+- **Self-Learning Offline Memory**: Remembers applied fixes locally in `~/.codesentry/autograd-memory.json`. When identical or similar patterns reappear, AutoGrad resolves them offline with **0ms latency** and **zero API calls or quota consumption**.
+
+### 6. 🚀 DeployGuard: Pre-Deployment Readiness & Infrastructure Gate
+- **Deployment Readiness Score**: Evaluates readiness percentage (0–100%) and determines deployment gate verdict: `PASSED`, `WARNING`, or `BLOCKED`.
+- **Container & Docker Checks**: Flags root users in containers, unpinned `:latest` tags, secrets in `ENV`/`ARG`, and insecure `ADD` directives.
+- **CI/CD Security**: Detects unpinned GitHub Actions (requiring commit SHAs), secrets echoed to build logs, and untrusted `pull_request_target` workflows.
+- **Config & Secrets Guard**: Intercepts committed `.env` files, production debug flags (`DEBUG=True`), permissive wildcard CORS with credentials, and missing HTTP security headers.
+- **Dedicated Command**: Run `codesentry deployguard .` or enforce in CI with `codesentry scan . --gate`.
+
+### 7. 🧠 ModelShield: AI / LLM / RAG & Agent Security Engine
+- **Prompt Injection Defense**: Flags direct, un-sanitized user input concatenated into LLM system or chat prompts.
+- **Model Deserialization Protection**: Intercepts insecure weight loading using `pickle` or unconstrained `torch.load(..., weights_only=False)` vulnerable to arbitrary code execution.
+- **Agent Sandbox Guards**: Flags AI agent tools that execute dynamic shell or eval code directly on model outputs.
+- **LLM Data Leakage**: Prevents transmitting credentials, API keys, or sensitive secrets in model prompt payloads.
+- **RAG Vector Injection**: Scans for un-sanitized query strings interpolated into vector database queries.
+
+### 8. 🕸️ Software Risk Graph & AttackGraph Multi-Step Tracing
+- **CodeTwin Architectural Modeling**: Automatically discovers external HTTP entrypoints, database sinks, shell execution points, and AI prompt interfaces.
+- **Multi-Step Attack Paths**: Correlates static findings to construct end-to-end exploit chains (e.g. `[Route: /api/query] ──▶ [Vulnerability: SQL Injection] ──▶ [Sink: db.query]`).
+- **Terminal & Report Visuals**: Renders color-coded ANSI attack chain cards in terminal output and interactive Mermaid diagrams in Markdown audit reports.
+
 ---
 
 ## 🚀 Installation Options
@@ -103,6 +127,12 @@ codesentry scan .
 
 # Fast static mode (skips cloud AI triage)
 codesentry scan . --no-ai
+
+# Pre-deployment readiness analysis & infrastructure gate
+codesentry deployguard .
+
+# Enforce strict CI/CD gate (exits with failure if gate is BLOCKED)
+codesentry scan . --gate
 
 # Automatic code repair
 codesentry scan . --fix

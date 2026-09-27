@@ -1,9 +1,0 @@
-{
-  "name": "mixed-project",
-  "version": "1.0.0",
-  "description": "A mixed project with various issues",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  }
-}

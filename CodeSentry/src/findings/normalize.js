@@ -173,12 +173,23 @@ function mapSemgrepCategory(result) {
   return 'code-quality';
 }
 
+function normalizeDirect(results) {
+  if (!Array.isArray(results)) return [];
+  return results.map((r) => {
+    if (r && r.id && r.tool && r.category && r.severity) return r;
+    return createFinding(r);
+  });
+}
+
 const NORMALIZERS = {
   eslint: normalizeEslint,
   typescript: normalizeTypescript,
   ruff: normalizeRuff,
   bandit: normalizeBandit,
   semgrep: normalizeSemgrep,
+  codesentry: normalizeDirect,
+  deployguard: normalizeDirect,
+  modelshield: normalizeDirect,
 };
 
 function normalize(tool, rawResults) {

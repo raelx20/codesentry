@@ -50,6 +50,7 @@ const colors = {
   blue: fgRgb(96, 165, 250),        // #60a5fa
   teal: fgRgb(45, 212, 191),        // #2dd4bf
   purple: fgRgb(192, 132, 252),     // #c084fc
+  magenta: fgRgb(217, 70, 239),    // #d946ef
 
   // Grayscale & Typography
   white: fgRgb(244, 244, 245),      // #f4f4f5 zinc-100

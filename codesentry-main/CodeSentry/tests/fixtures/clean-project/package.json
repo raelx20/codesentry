@@ -1,9 +1,0 @@
-{
-  "name": "clean-project",
-  "version": "1.0.0",
-  "description": "A clean project with no issues",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  }
-}

@@ -1,9 +1,0 @@
-{
-  "name": "broken-js",
-  "version": "1.0.0",
-  "description": "A JavaScript project with security issues",
-  "main": "app.js",
-  "scripts": {
-    "start": "node app.js"
-  }
-}

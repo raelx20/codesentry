@@ -15,6 +15,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const vm = require('node:vm');
 const theme = require('./theme');
+const { learnFromFix, matchLearnedFix } = require('../core/autograd');
+const { executeWithAutoSandbox, isCriticalChange } = require('../core/sandbox');
 
 /**
  * Extracts a window of lines around the target line (1-indexed).
@@ -195,6 +197,17 @@ function generateRuleFix(finding, fileContent) {
   const lineIdx = (finding.line || 1) - 1;
   const originalLine = lines[lineIdx] || '';
   const isPy = (finding.file || '').endsWith('.py') || (finding.file || '').endsWith('.pyw');
+
+  // Check AutoGrad offline learned memory bank first
+  const learned = matchLearnedFix(finding);
+  if (learned && learned.proposedPatch && originalLine.trim() !== '') {
+    return {
+      oldSnippet: originalLine,
+      newSnippet: learned.proposedPatch,
+      explanation: `[AutoGrad Memory] ${learned.explanation}`,
+      autogradLearned: true,
+    };
+  }
 
   // ── Bug Category Fixes ─────────────────────────────────────────────────────
 
@@ -1704,8 +1717,38 @@ function applyFixToFile(projectPath, finding, fix) {
     const content = fs.readFileSync(fullPath, 'utf8');
     const updated = applySnippetToContent(content, fix.oldSnippet, fix.newSnippet, finding.line);
     if (updated !== null && updated !== content) {
-      fs.writeFileSync(fullPath, updated, 'utf8');
-      return { success: true, file: finding.file, line: finding.line };
+      const sandboxResult = executeWithAutoSandbox({
+        projectPath,
+        filePath: fullPath,
+        originalContent: content,
+        proposedContent: updated,
+        findings: [finding],
+        oldSnippet: fix.oldSnippet,
+        newSnippet: fix.newSnippet,
+        applyFn: () => {
+          fs.writeFileSync(fullPath, updated, 'utf8');
+        },
+      });
+
+      if (!sandboxResult.success) {
+        return {
+          success: false,
+          sandboxed: sandboxResult.sandboxed,
+          error: sandboxResult.error,
+        };
+      }
+
+      try {
+        learnFromFix(finding, fix.oldSnippet, fix.newSnippet);
+      } catch {
+        // Non-fatal
+      }
+      return {
+        success: true,
+        file: finding.file,
+        line: finding.line,
+        sandboxed: sandboxResult.sandboxed,
+      };
     }
 
     return { success: false, error: 'Could not locate target code in file (content may have changed)' };
@@ -1946,16 +1989,44 @@ async function batchFixFile(projectPath, filePath, fileFindings, options = {}) {
       };
     }
 
+    let originalFileContent = '';
     try {
-      fs.writeFileSync(fullPath, content, 'utf8');
-    } catch (err) {
+      originalFileContent = fs.readFileSync(fullPath, 'utf8');
+    } catch {}
+
+    const sandboxResult = executeWithAutoSandbox({
+      projectPath,
+      filePath: fullPath,
+      originalContent: originalFileContent,
+      proposedContent: content,
+      findings: fileFindings,
+      applyFn: () => {
+        fs.writeFileSync(fullPath, content, 'utf8');
+      },
+    });
+
+    if (!sandboxResult.success) {
       return {
         file: filePath,
         applied: [],
         skipped: fileFindings,
-        error: `Failed to write changes to disk: ${err.message}`,
+        error: sandboxResult.error,
         totalIssues: fileFindings.length,
+        sandboxed: sandboxResult.sandboxed,
       };
+    }
+
+    for (const item of applied) {
+      if (sandboxResult.sandboxed) {
+        item.sandboxed = true;
+      }
+      if (item.finding && item.fix && item.fix.oldSnippet && item.fix.newSnippet) {
+        try {
+          learnFromFix(item.finding, item.fix.oldSnippet, item.fix.newSnippet);
+        } catch {
+          // Non-fatal
+        }
+      }
     }
   }
 

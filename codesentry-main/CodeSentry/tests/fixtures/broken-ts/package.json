@@ -1,9 +1,0 @@
-{
-  "name": "broken-ts",
-  "version": "1.0.0",
-  "description": "A TypeScript project with type errors",
-  "main": "app.ts",
-  "scripts": {
-    "build": "tsc"
-  }
-}

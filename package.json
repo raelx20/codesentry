@@ -18,6 +18,8 @@
   "scripts": {
     "start": "node CodeSentry/bin/codesentry.js",
     "scan": "node CodeSentry/bin/codesentry.js scan",
+    "deployguard": "node CodeSentry/bin/codesentry.js deployguard",
+    "demo": "node CodeSentry/bin/codesentry.js demo",
     "test": "npm test --prefix CodeSentry"
   },
   "keywords": [
@@ -35,12 +37,12 @@
   "author": "CodeSentry Team",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kaunteyaarjun/code_inspection_tool.git"
+    "url": "git+https://github.com/raelx20/codesentry.git"
   },
   "bugs": {
-    "url": "https://github.com/kaunteyaarjun/code_inspection_tool/issues"
+    "url": "https://github.com/raelx20/codesentry/issues"
   },
-  "homepage": "https://github.com/kaunteyaarjun/code_inspection_tool#readme",
+  "homepage": "https://github.com/raelx20/codesentry#readme",
   "publishConfig": {
     "access": "public"
   },

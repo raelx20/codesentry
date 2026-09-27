@@ -1,5 +1,8 @@
 const COMMANDS = {
   SCAN: 'scan',
+  DEPLOYGUARD: 'deployguard',
+  AUTOGRAD: 'autograd',
+  DEMO: 'demo',
   MODEL: 'model',
   AUTH: 'auth',
   LOGIN: 'login',
@@ -19,6 +22,8 @@ const OPTIONS = {
   FIX: '--fix',
   AUTO_FIX: '--auto-fix',
   YES: '--yes',
+  GATE: '--gate',
+  DEPLOYGUARD: '--deployguard',
   HELP: '--help',
   VERSION: '--version',
 };
@@ -83,6 +88,12 @@ class CommandParser {
       } else if (arg === OPTIONS.YES || arg === '-y' || arg === '--yes') {
         result.options.yes = true;
         result.options.fix = true;
+        i++;
+      } else if (arg === OPTIONS.GATE || arg === '--gate') {
+        result.options.gate = true;
+        i++;
+      } else if (arg === OPTIONS.DEPLOYGUARD || arg === '--deployguard') {
+        result.options.deployguard = true;
         i++;
       } else if (arg === OPTIONS.SEVERITY) {
         if (i + 1 < args.length) {
@@ -178,6 +189,8 @@ Usage: codesentry <command> [options]
 
 Commands:
   scan [path]         Scan a project (defaults to current directory)
+  deployguard [path]  Pre-deployment risk analysis & production readiness gate
+  demo                Instant live hackathon showcase (AutoGrad, DeployGuard, ModelShield & Healing)
   model               Interactively switch or select the active AI model
   auth                Configure or view OpenRouter API key & credentials
   version             Show version
@@ -188,6 +201,8 @@ AI analysis and Markdown report generation are ON by default.
 Options:
   --json              Output results as JSON
   --verbose           Show detailed progress information
+  --gate              CI/CD readiness gate (fails with exit code 1 if status is BLOCKED)
+  --deployguard       Focus analysis on containers, CI/CD, and deployment configs
   --fix, --auto-fix   Automatically repair all detected issues across the codebase
   --yes, -y           Apply all automated fixes without manual approval prompts
   --severity <level>  Filter by severity (BLOCKER, HIGH, MEDIUM, LOW, INFO)

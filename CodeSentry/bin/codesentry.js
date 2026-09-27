@@ -35,7 +35,7 @@ const { createOutputHandler, OUTPUT_MODES } = require(path.join(packageRoot, 'sr
 const { createProgressTracker, PROGRESS_STATES } = require(path.join(packageRoot, 'src', 'cli', 'progress'));
 const { createFormatter } = require(path.join(packageRoot, 'src', 'cli', 'formatter'));
 const { createReportGenerator } = require(path.join(packageRoot, 'src', 'cli', 'report'));
-const { Select } = require(path.join(packageRoot, 'src', 'cli', 'components', 'select'));
+const { Select, promptActionOnTab } = require(path.join(packageRoot, 'src', 'cli', 'components', 'select'));
 const { formatStatusIndicator } = require(path.join(packageRoot, 'src', 'cli', 'components', 'status-indicator'));
 const fixer = require(path.join(packageRoot, 'src', 'cli', 'fixer'));
 const enhancer = require(path.join(packageRoot, 'src', 'cli', 'enhancer'));
@@ -137,6 +137,13 @@ async function main() {
     process.exit(0);
   }
 
+  // ── Standalone 'demo' command (Hackathon Showcase) ─────────────────────────
+  if (parsed.command === COMMANDS.DEMO) {
+    const { runHackathonDemo } = require(path.join(packageRoot, 'src', 'cli', 'demo'));
+    await runHackathonDemo();
+    process.exit(0);
+  }
+
   // ── Standalone 'auth' command ──────────────────────────────────────────────
   if (parsed.command === COMMANDS.AUTH) {
     await auth.handleAuthCommand();
@@ -181,7 +188,7 @@ async function main() {
   }
 
   // ── 'scan' command with interactive session loop ───────────────────────────
-  if (parsed.command === COMMANDS.SCAN) {
+  if (parsed.command === COMMANDS.SCAN || parsed.command === COMMANDS.DEPLOYGUARD || parsed.command === COMMANDS.AUTOGRAD) {
     const jsonMode = parsed.options.json || false;
     const verbose = parsed.options.verbose || false;
 
@@ -284,6 +291,15 @@ async function main() {
           for (const line of findingLines) {
             output.print(line);
           }
+        }
+
+        // CI/CD Deployment Readiness Gate enforcement
+        if (parsed.options.gate && result.deployguard && result.deployguard.status === 'BLOCKED') {
+          if (!jsonMode) {
+            output.print('');
+            output.print(theme.colors.red(theme.bold(`❌ [DEPLOYGUARD GATE FAILED] ${result.deployguard.message}`)));
+          }
+          process.exit(1);
         }
 
         // Generate report by default (disable with --no-report)
@@ -496,11 +512,29 @@ async function main() {
         description: 'Close the inspection session and return to terminal',
       });
 
-      const action = await Select({
-        label: 'Audit session active. What would you like to do next?',
-        options: actionOptions,
-        defaultIndex: 0,
+      const hasFindings = Boolean(result && result.findings && result.findings.length > 0);
+      const rightTitle = hasFindings
+        ? `${result.findings.length} findings · press Tab for menu`
+        : 'clean baseline · press Tab for menu';
+      const summaryLabel = hasFindings && result.autograd && result.autograd.offlineResolvableCount > 0
+        ? `⚡ ${result.autograd.offlineResolvableCount} issues can be auto-resolved offline instantly`
+        : null;
+
+      const action = await promptActionOnTab({
+        rightTitle,
+        summaryLabel,
+        defaultAction: 'rescan',
+        selectProps: {
+          title: 'ACTIONS & FIXES',
+          label: 'Audit session active. What would you like to do next?',
+          options: actionOptions,
+          defaultIndex: 0,
+        },
       });
+
+      if (!action || action === 'exit') {
+        process.exit(0);
+      }
 
       if (action === 'apply_improvements') {
         const securityFindings = result.findings.filter(f => f.category === 'security');

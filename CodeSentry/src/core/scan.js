@@ -12,6 +12,9 @@ const { runStaticAnalyzers } = require('../analyzers/static');
 const { runCustomAnalyzers } = require('../analyzers/custom');
 const { createAIClient } = require('../analyzers/ai/client');
 const { createPromptGenerator } = require('../analyzers/ai/prompt');
+const { calculateAutoGrad } = require('./autograd');
+const { evaluateDeployReadiness } = require('./deployguard');
+const { buildRiskGraph } = require('./risk-graph');
 
 registerNormalizer('codesentry', normalizeCodesentry);
 
@@ -112,6 +115,9 @@ async function scan(projectPath, overrides = {}) {
   const aggregationResult = aggregate(filteredFindings);
   const scoreResult = score(aggregationResult);
   const verdictResult = verdict(scoreResult);
+  const autogradResult = calculateAutoGrad(filteredFindings, { targetPath: config.projectPath, projectPath: config.projectPath });
+  const deployguardResult = evaluateDeployReadiness(filteredFindings, discoveryResult.files);
+  const riskGraphResult = buildRiskGraph(discoveryResult.files, filteredFindings, config.projectPath);
   const duration = Date.now() - startTime;
 
   return {
@@ -125,6 +131,9 @@ async function scan(projectPath, overrides = {}) {
     aggregation: aggregationResult,
     score: scoreResult,
     verdict: verdictResult,
+    autograd: autogradResult,
+    deployguard: deployguardResult,
+    riskGraph: riskGraphResult,
     metadata: {
       duration,
       timestamp: new Date().toISOString(),

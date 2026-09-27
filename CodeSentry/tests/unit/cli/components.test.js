@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeOptions, renderSelectView, Select } = require('../../../src/cli/components/select');
+const { normalizeOptions, renderSelectView, Select, promptActionOnTab } = require('../../../src/cli/components/select');
 const { formatStatusIndicator, StatusIndicator, getStatusColor } = require('../../../src/cli/components/status-indicator');
 const { Typewriter, getRandomProgrammingMessage, PROGRAMMING_MESSAGES } = require('../../../src/cli/components/typewriter');
 const { createProgressTracker, PROGRESS_STATES } = require('../../../src/cli/progress');
@@ -65,6 +65,13 @@ describe('CLI Components', () => {
 
       assert.equal(result, 'staging');
       assert.equal(captured, 'staging');
+    });
+
+    it('should return defaultAction in non-interactive environment for promptActionOnTab', async () => {
+      const action = await promptActionOnTab({
+        defaultAction: 'rescan',
+      });
+      assert.equal(action, 'rescan');
     });
   });
 

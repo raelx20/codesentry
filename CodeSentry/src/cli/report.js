@@ -55,6 +55,9 @@ class ReportGenerator {
     sections.push(this._header(result));
     sections.push(this._executiveSummary(result));
     sections.push(this._scoreCard(result));
+    sections.push(this._autogradSection(result));
+    sections.push(this._deployguardSection(result));
+    sections.push(this._attackGraphSection(result));
     sections.push(this._severityBreakdown(result));
     sections.push(this._categoryBreakdown(result));
     sections.push(this._findingsByFile(result));
@@ -134,6 +137,56 @@ class ReportGenerator {
       }
     }
 
+    return lines.join('\n');
+  }
+
+  // ── AutoGrad Risk Intelligence ─────────────────────────────────────────────
+
+  _autogradSection(result) {
+    if (!result.autograd) return null;
+    const ag = result.autograd;
+    const lines = [];
+    lines.push(`## 🧠 AutoGrad Risk Intelligence & Self-Learning Telemetry`);
+    lines.push('');
+    lines.push(`| Metric | Value |`);
+    lines.push(`|---|---|`);
+    lines.push(`| **AutoGrad Grade** | **${ag.grade}** |`);
+    lines.push(`| **Risk Score** | ${ag.score} / 100 |`);
+    lines.push(`| **Trend** | ${ag.trend ? ag.trend.symbol + ' (' + ag.trend.direction + ')' : 'Baseline'} |`);
+    lines.push(`| **Offline-Resolvable Flaws** | ${ag.offlineResolvableCount} issues can be solved immediately offline from learned memory |`);
+    return lines.join('\n');
+  }
+
+  // ── DeployGuard Readiness ──────────────────────────────────────────────────
+
+  _deployguardSection(result) {
+    if (!result.deployguard) return null;
+    const dg = result.deployguard;
+    const lines = [];
+    lines.push(`## 🚀 DeployGuard: Pre-Deployment & Readiness Gate`);
+    lines.push('');
+    lines.push(`**Gate Status**: \`${dg.status}\` — ${dg.message}`);
+    lines.push('');
+    lines.push(`**Readiness Score**: **${dg.readinessScore}%**`);
+    lines.push('');
+    lines.push(`| Infrastructure / Config Check | Status | Count |`);
+    lines.push(`|---|---|---|`);
+    lines.push(`| Deployment Blockers | ${dg.metrics.blockers > 0 ? '❌ BLOCKED' : '✅ CLEAN'} | ${dg.metrics.blockers} |`);
+    lines.push(`| High Priority Risks | ${dg.metrics.high > 0 ? '⚠️ WARNING' : '✅ CLEAN'} | ${dg.metrics.high} |`);
+    lines.push(`| Medium/Low Config Flaws | ℹ️ INFO | ${dg.metrics.medium + dg.metrics.low} |`);
+    return lines.join('\n');
+  }
+
+  // ── Software Risk Graph & AttackGraph ──────────────────────────────────────
+
+  _attackGraphSection(result) {
+    if (!result.riskGraph) return null;
+    const lines = [];
+    lines.push(`## 🕸️ Software Risk Graph & Exploitable Attack Paths`);
+    lines.push('');
+    lines.push(`CodeTwin modeled **${result.riskGraph.summary.nodeCount} components** and correlated **${result.riskGraph.summary.attackPaths.length} attack path(s)** across codebase entrypoints and sinks.`);
+    lines.push('');
+    lines.push(result.riskGraph.mermaidOutput);
     return lines.join('\n');
   }
 
