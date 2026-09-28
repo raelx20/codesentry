@@ -153,10 +153,17 @@ function renderLogo() {
   const line4 =
     s('  ▀▀   ▀▀   ▀▀   ▀▀   ▀▀   ▀▀  ▀▀  ▀▀  ▀▀   ▀▀');
 
+  let pkgVersion = '0.2.0';
+  try {
+    pkgVersion = require('../../package.json').version || '0.2.0';
+  } catch {
+    try { pkgVersion = require('../../../package.json').version; } catch {}
+  }
+
   const subtitle =
     g('DevSecOps & AI Code Inspection Engine') +
     s('  ·  ') +
-    c('v0.1.0');
+    c(`v${pkgVersion}`);
 
   const logoLines = ['', line1, line2, line3, line4, '', subtitle, ''];
   return logoLines.map(line => {
@@ -397,8 +404,10 @@ function getCodeSnippet(filePath, targetLine, radius = 2) {
 
 // ── CodeSentry Header Session Card ─────────────────────────────────────────────
 function renderSessionCard(projectPath, options = {}) {
-  const { aiModel = 'auto', languages = [] } = options;
+  const { aiModel = 'auto', languages = [], provider = null } = options;
   const langStr = languages.length > 0 ? languages.join(' · ') : 'auto-detect';
+  const rawProvider = provider || process.env.CODESENTRY_AI_PROVIDER || (process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY ? 'OpenAI' : 'OpenRouter');
+  const displayProvider = rawProvider.charAt(0).toUpperCase() + rawProvider.slice(1);
 
   // Format path gracefully so it stays on one neat line
   const displayPath = visibleWidth(projectPath) > 50
@@ -408,7 +417,7 @@ function renderSessionCard(projectPath, options = {}) {
   const lines = [
     `${colors.gray('■ Target ')} ${colors.brightWhite(displayPath)}`,
     `${colors.gray('■ Engines')} ${colors.white('Ruff')} ${colors.darkGray('·')} ${colors.white('Bandit')} ${colors.darkGray('·')} ${colors.white('Semgrep')} ${colors.darkGray('·')} ${colors.white('Custom')}`,
-    `${colors.gray('■ AI     ')} ${colors.cyan('OpenRouter')} ${colors.darkGray('·')} ${colors.white(aiModel)} ${colors.green('● active')}`,
+    `${colors.gray('■ AI     ')} ${colors.cyan(displayProvider)} ${colors.darkGray('·')} ${colors.white(aiModel)} ${colors.green('● active')}`,
   ];
 
   const renderedCard = card(lines, {

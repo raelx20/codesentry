@@ -29,7 +29,7 @@ const REVERSE_CATEGORY_MAP = {
   'resources': 'resource',
 };
 
-const TOOLS = ['eslint', 'typescript', 'ruff', 'bandit', 'semgrep', 'codesentry', 'ai', 'deployguard', 'modelshield'];
+const TOOLS = ['eslint', 'typescript', 'ruff', 'bandit', 'semgrep', 'codesentry', 'ai', 'deployguard', 'modelshield', 'dependency-audit', 'sca'];
 const CONFIDENCES = ['high', 'medium', 'low'];
 
 function mapCategory(category) {

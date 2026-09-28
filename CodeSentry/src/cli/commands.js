@@ -24,6 +24,8 @@ const OPTIONS = {
   YES: '--yes',
   GATE: '--gate',
   DEPLOYGUARD: '--deployguard',
+  PROVIDER: '--provider',
+  AI_PROVIDER: '--ai-provider',
   HELP: '--help',
   VERSION: '--version',
 };
@@ -122,6 +124,14 @@ class CommandParser {
           result.errors.push('Missing value for --ai-model');
           i++;
         }
+      } else if (arg === OPTIONS.PROVIDER || arg === OPTIONS.AI_PROVIDER) {
+        if (i + 1 < args.length) {
+          result.options.aiProvider = args[i + 1].toLowerCase();
+          i += 2;
+        } else {
+          result.errors.push(`Missing value for ${arg}`);
+          i++;
+        }
       } else if (arg === OPTIONS.NO_REPORT) {
         result.options.noReport = true;
         i++;
@@ -190,7 +200,7 @@ Usage: codesentry <command> [options]
 Commands:
   scan [path]         Scan a project (defaults to current directory)
   deployguard [path]  Pre-deployment risk analysis & production readiness gate
-  demo                Instant live hackathon showcase (AutoGrad, DeployGuard, ModelShield & Healing)
+  demo                Instant interactive live showcase (AutoGrad, DeployGuard, ModelShield & Healing)
   model               Interactively switch or select the active AI model
   auth                Configure or view OpenRouter API key & credentials
   version             Show version

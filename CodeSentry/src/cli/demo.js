@@ -1,5 +1,5 @@
 /**
- * CodeSentry Hackathon Live Showcase Engine
+ * CodeSentry Interactive Live Showcase Engine
  *
  * Runs an end-to-end interactive demonstration showcasing:
  * 1. Multi-Vector SAST & Architecture Analysis
@@ -19,7 +19,7 @@ const theme = require('./theme');
 const { scan } = require('../core/scan');
 const { executeWithAutoSandbox } = require('../core/sandbox');
 
-async function runHackathonDemo() {
+async function runLiveDemo() {
   const demoStartTime = Date.now();
   theme.applyBlackTerminalBackground();
   const c = theme.colors;
@@ -27,19 +27,19 @@ async function runHackathonDemo() {
   console.log(theme.renderLogo());
 
   const bannerLines = [
-    `  ${c.cyan(theme.bold('CODESENTRY HACKATHON LIVE SHOWCASE'))}`,
+    `  ${c.cyan(theme.bold('CODESENTRY INTERACTIVE LIVE SHOWCASE'))}`,
     `  ${c.lightGray('Zero-Dependency DevSecOps & AI Code Inspection Engine')}`,
     `  ${c.darkGray('Demonstrating AutoGrad, DeployGuard, ModelShield, AttackGraph & AutoSandbox')}`,
   ];
   console.log(theme.card(bannerLines, {
-    title: c.cyan(theme.bold('HACKATHON DEMO')),
+    title: c.cyan(theme.bold('LIVE SHOWCASE')),
     rightTitle: c.gray('v0.1.0'),
     width: 76,
   }));
   console.log('');
 
   // 1. Create realistic ephemeral polyglot microservice scenario
-  const demoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentry-hackathon-demo-'));
+  const demoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentry-live-demo-'));
   const apiDir = path.join(demoDir, 'src', 'api');
   const aiDir = path.join(demoDir, 'src', 'ai');
   fs.mkdirSync(apiDir, { recursive: true });
@@ -248,10 +248,10 @@ CMD ["node", "src/api/server.js"]
   } catch {}
 
   const totalMs = Date.now() - demoStartTime;
-  console.log(`  ${c.cyan('◆')} ${c.brightWhite('Hackathon demo completed successfully in')} ${c.cyan(String(totalMs))}ms.`);
+  console.log(`  ${c.cyan('◆')} ${c.brightWhite('Interactive showcase demo completed successfully in')} ${c.cyan(String(totalMs))}ms.`);
   console.log(`  ${c.gray('Run')} ${c.white('codesentry scan .')} ${c.gray('to inspect your own project!')}\n`);
 }
 
 module.exports = {
-  runHackathonDemo,
+  runLiveDemo,
 };

@@ -63,4 +63,29 @@ app.post('/api/user', (req, res) => {
     assert.strictEqual(terminalOutput, null);
     assert.ok(mermaidOutput.includes('Zero Exploitable Attack Paths Detected'));
   });
+
+  await t.test('computes breaking change impact via getImpactedFiles', () => {
+    const fileA = path.join(tmpDir, 'db.js');
+    const fileB = path.join(tmpDir, 'user-service.js');
+    const fileC = path.join(tmpDir, 'user-controller.js');
+
+    fs.writeFileSync(fileA, 'module.exports = { query: () => {} };', 'utf8');
+    fs.writeFileSync(fileB, 'const db = require("./db"); module.exports = { getUser: () => db.query() };', 'utf8');
+    fs.writeFileSync(fileC, 'const userService = require("./user-service"); const app = {};', 'utf8');
+
+    const graph = new SoftwareRiskGraph();
+    graph.build(['db.js', 'user-service.js', 'user-controller.js'], [], tmpDir);
+
+    const impactedByDb = graph.getImpactedFiles('db.js');
+    assert.ok(impactedByDb.includes('user-service.js'));
+    assert.ok(impactedByDb.includes('user-controller.js'));
+    assert.strictEqual(impactedByDb.length, 2);
+
+    const impactedByService = graph.getImpactedFiles('user-service.js');
+    assert.ok(impactedByService.includes('user-controller.js'));
+    assert.strictEqual(impactedByService.length, 1);
+
+    const impactedByController = graph.getImpactedFiles('user-controller.js');
+    assert.strictEqual(impactedByController.length, 0);
+  });
 });

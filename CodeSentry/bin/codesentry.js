@@ -137,10 +137,10 @@ async function main() {
     process.exit(0);
   }
 
-  // ── Standalone 'demo' command (Hackathon Showcase) ─────────────────────────
+  // ── Standalone 'demo' command (Interactive Live Showcase) ──────────────────
   if (parsed.command === COMMANDS.DEMO) {
-    const { runHackathonDemo } = require(path.join(packageRoot, 'src', 'cli', 'demo'));
-    await runHackathonDemo();
+    const { runLiveDemo } = require(path.join(packageRoot, 'src', 'cli', 'demo'));
+    await runLiveDemo();
     process.exit(0);
   }
 
@@ -199,7 +199,8 @@ async function main() {
     const formatter = createFormatter();
 
     // Mutable state for the interactive loop
-    let currentModel = parsed.options.aiModel || process.env.OPENROUTER_MODEL || 'auto';
+    let currentProvider = (parsed.options.aiProvider || process.env.CODESENTRY_AI_PROVIDER || (process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY ? 'openai' : 'openrouter')).toLowerCase();
+    let currentModel = parsed.options.aiModel || (currentProvider === 'openai' ? (process.env.OPENAI_MODEL || 'gpt-4o-mini') : (process.env.OPENROUTER_MODEL || 'auto'));
     let currentNoAi = Boolean(parsed.options.noAi || currentModel === 'none');
     let isFirstRun = true;
     let lastReportPath = null;
@@ -210,15 +211,23 @@ async function main() {
         jsonMode,
         noAi: currentNoAi,
       });
-      if (authResult.skipped && !process.env.OPENROUTER_API_KEY) {
+      if (authResult.skipped && !process.env.OPENROUTER_API_KEY && !process.env.OPENAI_API_KEY) {
         currentNoAi = true;
         currentModel = 'none';
       } else if (authResult.isConfigured) {
         if (!parsed.options.aiModel && authResult.model) {
           currentModel = authResult.model;
         }
+        if (authResult.provider) {
+          currentProvider = authResult.provider;
+        }
       }
     }
+
+    let fixIterations = 0;
+    const MAX_FIX_ITERATIONS = 3;
+    let lastSkippedCount = 0;
+    let lastFailedCount = 0;
 
     while (true) {
       const progress = createProgressTracker({
@@ -234,6 +243,7 @@ async function main() {
         }
         output.print(theme.renderSessionCard(parsed.projectPath, {
           aiModel: currentNoAi ? 'disabled (static)' : currentModel,
+          provider: currentProvider,
         }));
         output.print('');
       }
@@ -251,6 +261,7 @@ async function main() {
           jsonMode,
           verbose,
           aiEnabled: !currentNoAi,
+          aiProvider: currentProvider,
           onProgress: (state) => {
             progress.update(state);
           },
@@ -287,6 +298,11 @@ async function main() {
           const findingLines = formatter.formatFindings(result.findings, {
             limit: 10,
             showDetails: true,
+            errors: result.metadata ? result.metadata.errors : [],
+            analyzerWarnings: result.metadata ? result.metadata.analyzerWarnings : [],
+            skippedCount: lastSkippedCount,
+            failedCount: lastFailedCount,
+            quotaExceeded: Boolean(result.metadata && (result.metadata.quotaExceeded || (result.metadata.errors && result.metadata.errors.some(e => /quota|credit|rate.limit|balance/i.test(e.message || ''))))),
           });
           for (const line of findingLines) {
             output.print(line);
@@ -379,7 +395,11 @@ async function main() {
 
         const findingsByFile = new Map();
         for (const f of result.findings) {
-          const fileKey = f.file || 'unknown';
+          let fileKey = f.file || 'unknown';
+          if (path.isAbsolute(fileKey)) {
+            fileKey = path.relative(parsed.projectPath, fileKey) || path.basename(fileKey);
+          }
+          fileKey = fileKey.replace(/^[.\/\\]+/, '').replace(/\\/g, '/');
           if (!findingsByFile.has(fileKey)) {
             findingsByFile.set(fileKey, []);
           }
@@ -399,7 +419,9 @@ async function main() {
             preferredModel: currentModel,
             onModelSwitch: ({ failedModel, nextModel, error, isTokenExpire }) => {
               let reason = 'Model error';
-              if (/free-models-per-day/i.test(error || '')) {
+              if (/credit_balance_exhausted|insufficient_quota/i.test(error || '')) {
+                reason = 'OpenAI account credit balance exhausted (0 credits)';
+              } else if (/free-models-per-day/i.test(error || '')) {
                 reason = 'Free daily account limit reached on OpenRouter';
               } else if (/use this slug instead/i.test(error || '')) {
                 reason = 'Free slug retired by OpenRouter, using standard model';
@@ -439,18 +461,25 @@ async function main() {
           }
         }
 
+        lastSkippedCount = skippedCount;
+        lastFailedCount = failedCount;
+
         output.print('\n' + formatStatusIndicator({
           status: appliedCount > 0 ? 'online' : 'warning',
           label: `Fix Summary: ${theme.colors.green(appliedCount + ' applied')}${skippedCount > 0 ? `, ${theme.colors.yellow(skippedCount + ' skipped')}` : ''}${failedCount > 0 ? `, ${theme.colors.red(failedCount + ' failed')}` : ''}`,
         }));
 
-        parsed.options.fix = false;
-        parsed.options.yes = false;
-
-        if (appliedCount > 0) {
-          output.print(theme.colors.gray('\nRe-scanning codebase to verify fixes...\n'));
+        fixIterations++;
+        if (appliedCount > 0 && fixIterations < MAX_FIX_ITERATIONS) {
+          parsed.options.fix = true;
+          parsed.options.yes = true;
+          output.print(theme.colors.gray(`\nRe-scanning codebase to verify and apply follow-up fixes (pass ${fixIterations + 1}/${MAX_FIX_ITERATIONS})...\n`));
           continue;
         }
+
+        parsed.options.fix = false;
+        parsed.options.yes = false;
+        fixIterations = 0;
       }
 
       // Non-interactive or JSON mode exits immediately (e.g. CI/CD or automation)
@@ -515,10 +544,14 @@ async function main() {
       const hasFindings = Boolean(result && result.findings && result.findings.length > 0);
       const rightTitle = hasFindings
         ? `${result.findings.length} findings · press Tab for menu`
-        : 'clean baseline · press Tab for menu';
+        : (lastSkippedCount > 0
+            ? `${lastSkippedCount} skipped issues · press Tab for menu`
+            : ((result && result.metadata && result.metadata.errors && result.metadata.errors.length > 0)
+                ? 'scan incomplete (errors) · press Tab for menu'
+                : 'clean baseline · press Tab for menu'));
       const summaryLabel = hasFindings && result.autograd && result.autograd.offlineResolvableCount > 0
         ? `⚡ ${result.autograd.offlineResolvableCount} issues can be auto-resolved offline instantly`
-        : null;
+        : (lastSkippedCount > 0 ? `⚠ ${lastSkippedCount} issue(s) skipped — manual review required` : null);
 
       const action = await promptActionOnTab({
         rightTitle,
@@ -632,7 +665,11 @@ async function main() {
           // CodeSentry: eviction guard helper
           function pruneFindingsByFile() { while (findingsByFile.size > MAX_FINDINGSBYFILE_SIZE) findingsByFile.delete(findingsByFile.keys().next().value); }
           for (const f of targetPool) {
-            const fileKey = f.file || 'unknown';
+            let fileKey = f.file || 'unknown';
+            if (path.isAbsolute(fileKey)) {
+              fileKey = path.relative(parsed.projectPath, fileKey) || path.basename(fileKey);
+            }
+            fileKey = fileKey.replace(/^[.\/\\]+/, '').replace(/\\/g, '/');
             if (!findingsByFile.has(fileKey)) {
               findingsByFile.set(fileKey, []);
             }
@@ -695,13 +732,17 @@ async function main() {
               }
             }
           }
+          lastSkippedCount = skippedCount;
+          lastFailedCount = failedCount;
           output.print('');
           output.print(formatStatusIndicator({
             status: appliedCount > 0 ? 'online' : 'warning',
             label: `Fix Summary: ${theme.colors.green(appliedCount + ' applied')}${skippedCount > 0 ? `, ${theme.colors.yellow(skippedCount + ' skipped')}` : ''}${failedCount > 0 ? `, ${theme.colors.red(failedCount + ' failed')}` : ''}`,
           }));
           if (appliedCount > 0) {
-            output.print(theme.colors.gray('\nRe-scanning to verify fixes...\n'));
+            output.print(theme.colors.gray('\nRe-scanning to verify and complete fixes...\n'));
+            parsed.options.fix = true;
+            parsed.options.yes = true;
           } else {
             output.print(theme.colors.gray('\nNo files were modified.\n'));
           }
@@ -818,8 +859,15 @@ async function main() {
               continue;
             }
 
+            const impactedFiles = (scanResult.riskGraph?.getImpactedFiles || scanResult.riskGraph?.graph?.getImpactedFiles)
+              ? (scanResult.riskGraph.getImpactedFiles || scanResult.riskGraph.graph.getImpactedFiles.bind(scanResult.riskGraph.graph))(targetFinding.file)
+              : [];
+
             output.print('');
-            output.print(fixer.formatDiffPreview(targetFinding, fix));
+            output.print(fixer.formatDiffPreview(targetFinding, fix, { impactedFiles }));
+            if (impactedFiles.length > 0) {
+              output.print(`  ${theme.colors.yellow('⚠️  Impact Warning:')} This file is used by ${theme.colors.cyan(impactedFiles.length)} other file${impactedFiles.length === 1 ? '' : 's'}: ${theme.colors.gray(impactedFiles.slice(0, 3).join(', '))}${impactedFiles.length > 3 ? theme.colors.gray(` (+${impactedFiles.length - 3} more)`) : ''}`);
+            }
             output.print('');
 
             const confirmAction = await Select({
@@ -829,7 +877,9 @@ async function main() {
                   label: 'Yes, apply fix to file',
                   value: 'confirm',
                   badge: 'APPLY',
-                  description: `Write changes to ${targetFinding.file}`,
+                  description: impactedFiles.length > 0
+                    ? `Write changes to ${targetFinding.file} (used by ${impactedFiles.length} other files)`
+                    : `Write changes to ${targetFinding.file}`,
                 },
                 {
                   label: 'No, skip / cancel',
@@ -988,6 +1038,8 @@ async function main() {
           output.print(theme.colors.gray('Re-initiating codebase inspection...\n'));
         }
       } else if (action === 'rescan') {
+        lastSkippedCount = 0;
+        lastFailedCount = 0;
         output.print(theme.colors.gray('Re-initiating codebase inspection...\n'));
       } else if (action === 'exit') {
         output.print('\n' + theme.colors.cyan('◆') + ' ' + theme.colors.white('CodeSentry session closed.'));

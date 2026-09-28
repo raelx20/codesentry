@@ -97,6 +97,15 @@ describe('Auth Module & Global Configuration', () => {
       const config = readGlobalConfig(tempConfigPath);
       assert.deepEqual(config, {});
     });
+
+    it('should enforce 0o600 file permissions on saveGlobalConfig', () => {
+      saveGlobalConfig({ openrouter_api_key: 'sk-or-v1-secret' }, tempConfigPath);
+      assert.ok(fs.existsSync(tempConfigPath));
+      if (process.platform !== 'win32') {
+        const stat = fs.statSync(tempConfigPath);
+        assert.equal(stat.mode & 0o777, 0o600);
+      }
+    });
   });
 
   describe('loadGlobalConfig', () => {

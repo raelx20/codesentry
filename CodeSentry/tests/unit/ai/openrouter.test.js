@@ -401,4 +401,29 @@ describe('OpenRouter AI Module', () => {
       assert.equal(res.fixes[0].newSnippet, 'const a = 1;');
     });
   });
+
+  describe('PromptGenerator Architecture Awareness', () => {
+    it('should inject architectural repo summary and impacted files when fileContext is supplied', () => {
+      const generator = createPromptGenerator();
+      const finding = {
+        category: 'security',
+        severity: 'HIGH',
+        file: 'src/db.js',
+        line: 12,
+        rule: 'sql-injection',
+        message: 'Unparameterized query',
+      };
+      const fileContext = {
+        repoSummary: '- src/server.js [ENTRYPOINT: GET /users]\n- src/db.js [DATA_SINK: db.query]',
+        impactedFiles: ['src/server.js', 'src/controllers/user.js'],
+      };
+
+      const prompt = generator.generateFindingAnalysisPrompt(finding, 'const query = "SELECT " + id;', fileContext);
+
+      assert.ok(prompt.includes('Architecture & Impact Context:'));
+      assert.ok(prompt.includes('Dependent / Impacted Files (2): src/server.js, src/controllers/user.js'));
+      assert.ok(prompt.includes('src/server.js [ENTRYPOINT: GET /users]'));
+      assert.ok(prompt.includes('src/db.js [DATA_SINK: db.query]'));
+    });
+  });
 });

@@ -31,6 +31,21 @@ class PromptGenerator {
       parts.push('```');
       parts.push('');
     }
+
+    if (fileContext) {
+      parts.push('Architecture & Impact Context:');
+      if (typeof fileContext === 'string') {
+        parts.push(fileContext);
+      } else {
+        if (Array.isArray(fileContext.impactedFiles) && fileContext.impactedFiles.length > 0) {
+          parts.push(`- Dependent / Impacted Files (${fileContext.impactedFiles.length}): ${fileContext.impactedFiles.join(', ')}`);
+        }
+        if (fileContext.repoSummary) {
+          parts.push(fileContext.repoSummary);
+        }
+      }
+      parts.push('');
+    }
     
     parts.push('Respond with this exact JSON structure:');
     parts.push('{"explanation":"brief explanation","severity":"HIGH|MEDIUM|LOW","confidence":0.8,"falsePositiveProbability":0.1,"impact":"brief impact","suggestedFix":"brief fix"}');

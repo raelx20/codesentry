@@ -7,6 +7,7 @@ node_modules/
 .env.*.local
 *.env
 !.env.example
+.npmrc
 
 # CodeSentry generated reports & local config
 codesentry-report.md

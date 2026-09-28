@@ -1,18 +1,21 @@
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { checkCachedAvailability } = require('./availability');
 
 const execFileAsync = promisify(execFile);
 
 const TOOL_NAME = 'semgrep';
 const TIMEOUT_MS = 15000;
 
-async function checkAvailability() {
-  try {
-    await execFileAsync('semgrep', ['--version'], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
+async function checkAvailability(options = {}) {
+  return checkCachedAvailability(TOOL_NAME, async () => {
+    try {
+      await execFileAsync('semgrep', ['--version'], { timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }, options);
 }
 
 async function runSemgrep(files, config = {}) {
@@ -20,7 +23,7 @@ async function runSemgrep(files, config = {}) {
 
   if (!files || files.length === 0) return result;
 
-  const available = await checkAvailability();
+  const available = await checkAvailability(config);
   if (!available) {
     result.warning = 'Semgrep not available. Install with: pip install semgrep';
     return result;

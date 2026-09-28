@@ -43,6 +43,9 @@ function readGlobalConfig(customPath = null) {
     if (!fs.existsSync(filePath)) {
       return {};
     }
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch {}
     const content = fs.readFileSync(filePath, 'utf8');
     const parsed = JSON.parse(content);
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -53,7 +56,8 @@ function readGlobalConfig(customPath = null) {
 
 /**
   * Merges updates into the global config JSON file and writes it to disk.
-  * Creates the ~/.codesentry directory if it doesn't exist.
+  * Creates the ~/.codesentry directory if it doesn't exist with 0o700 permissions
+  * and writes config.json with 0o600 (owner read/write only).
   */
 function saveGlobalConfig(updates = {}, customPath = null) {
   const filePath = customPath || getGlobalConfigPath();
@@ -61,7 +65,7 @@ function saveGlobalConfig(updates = {}, customPath = null) {
 
   try {
     if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
+      fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
     }
 
     const existing = readGlobalConfig(filePath);
@@ -75,7 +79,12 @@ function saveGlobalConfig(updates = {}, customPath = null) {
       merged.created_at = new Date().toISOString();
     }
 
-    fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf8');
+    // Write file with user-only permissions (0o600) and enforce chmod
+    fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), { encoding: 'utf8', mode: 0o600 });
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch {}
+
     return merged;
   } catch (err) {
     return null;
@@ -105,20 +114,40 @@ function loadGlobalConfig(customPath = null) {
     process.env.AGENTROUTER_BASE_URL = config.agentrouter_base_url || config.omniroute_base_url;
   }
 
+  if (!process.env.OPENAI_API_KEY && config.openai_api_key) {
+    process.env.OPENAI_API_KEY = config.openai_api_key;
+  }
+
+  if (!process.env.OPENAI_MODEL && config.openai_model) {
+    process.env.OPENAI_MODEL = config.openai_model;
+  }
+
   if (!process.env.CODESENTRY_AI_PROVIDER && config.ai_provider) {
     process.env.CODESENTRY_AI_PROVIDER = config.ai_provider;
   }
 
-  const activeProvider = (process.env.CODESENTRY_AI_PROVIDER || config.ai_provider || 'openrouter').toLowerCase();
+  const activeProvider = (
+    process.env.CODESENTRY_AI_PROVIDER ||
+    config.ai_provider ||
+    (process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY ? 'openai' : 'openrouter')
+  ).toLowerCase();
+
+  let resolvedApiKey = process.env.OPENROUTER_API_KEY || null;
+  if (activeProvider === 'openai') {
+    resolvedApiKey = process.env.OPENAI_API_KEY || null;
+  } else if (activeProvider === 'agentrouter') {
+    resolvedApiKey = process.env.AGENTROUTER_API_KEY || null;
+  }
 
   return {
     config,
     provider: activeProvider,
-    apiKey: activeProvider === 'agentrouter' ? (process.env.AGENTROUTER_API_KEY || null) : (process.env.OPENROUTER_API_KEY || null),
+    apiKey: resolvedApiKey,
     openrouterKey: process.env.OPENROUTER_API_KEY || null,
+    openaiKey: process.env.OPENAI_API_KEY || null,
     agentrouterKey: process.env.AGENTROUTER_API_KEY || null,
-    model: process.env.OPENROUTER_MODEL || config.openrouter_model || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    isConfigured: Boolean(process.env.OPENROUTER_API_KEY || process.env.AGENTROUTER_API_KEY),
+    model: process.env.OPENAI_MODEL || process.env.OPENROUTER_MODEL || config.openrouter_model || 'gpt-4o-mini',
+    isConfigured: Boolean(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || process.env.AGENTROUTER_API_KEY),
   };
 }
 
@@ -178,12 +207,18 @@ async function ensureAuth(options = {}) {
   }
 
   // Check if we already have an API key (from env, .env, or ~/.codesentry/config.json)
-  const currentKey = process.env.OPENROUTER_API_KEY;
+  const activeProvider = (process.env.CODESENTRY_AI_PROVIDER || 'openai').toLowerCase();
+  const currentKey = activeProvider === 'openai'
+    ? (process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || process.env.AGENTROUTER_API_KEY)
+    : (process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || process.env.AGENTROUTER_API_KEY);
+
   if (currentKey && !forcePrompt) {
     return {
       isConfigured: true,
       apiKey: currentKey,
-      model: process.env.OPENROUTER_MODEL || 'poolside/laguna-s-2.1:free',
+      model: activeProvider === 'openai'
+        ? (process.env.OPENAI_MODEL || 'gpt-4o-mini')
+        : (process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'),
     };
   }
 
@@ -294,24 +329,32 @@ async function handleAuthCommand(options = {}) {
   console.log(theme.renderLogo());
 
   const currentConfig = readGlobalConfig();
-  const activeProvider = (process.env.CODESENTRY_AI_PROVIDER || currentConfig.ai_provider || 'openrouter').toLowerCase();
+  const activeProvider = (process.env.CODESENTRY_AI_PROVIDER || currentConfig.ai_provider || (currentConfig.openai_api_key ? 'openai' : 'openrouter')).toLowerCase();
+  const openaiKey = process.env.OPENAI_API_KEY || currentConfig.openai_api_key || null;
   const openrouterKey = process.env.OPENROUTER_API_KEY || currentConfig.openrouter_api_key || null;
   const agentrouterKey = process.env.AGENTROUTER_API_KEY || currentConfig.agentrouter_api_key || currentConfig.omniroute_api_key || null;
   const agentrouterUrl = process.env.AGENTROUTER_BASE_URL || currentConfig.agentrouter_base_url || 'https://agentrouter.org/v1';
-  const currentModel = process.env.OPENROUTER_MODEL || currentConfig.openrouter_model || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
+  const currentModel = activeProvider === 'openai'
+    ? (process.env.OPENAI_MODEL || currentConfig.openai_model || 'gpt-4o-mini')
+    : (process.env.OPENROUTER_MODEL || currentConfig.openrouter_model || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free');
   const configPath = getGlobalConfigPath();
 
-  const isConfigured = Boolean(openrouterKey || agentrouterKey);
+  const isConfigured = Boolean(openrouterKey || agentrouterKey || openaiKey);
+
+  let activeProviderLabel = 'OpenRouter';
+  if (activeProvider === 'openai') activeProviderLabel = 'OpenAI';
+  else if (activeProvider === 'agentrouter') activeProviderLabel = 'AgentRouter';
 
   const statusLines = [
     `${theme.colors.cyan('▎')} ${theme.colors.brightWhite(theme.bold('Authentication Status'))}`,
     `${theme.colors.cyan('▎')}`,
     `${theme.colors.cyan('▎')} ${theme.colors.white('Status:')}          ${isConfigured ? theme.colors.green('● Configured & Ready') : theme.colors.yellow('○ Not configured (Static mode only)')}`,
-    `${theme.colors.cyan('▎')} ${theme.colors.white('Active Router:')}   ${activeProvider === 'agentrouter' ? theme.colors.cyan('● AgentRouter') : theme.colors.green('● OpenRouter')}`,
-    `${theme.colors.cyan('▎')} ${theme.colors.white('OpenRouter:')}      ${openrouterKey ? theme.colors.green(maskApiKey(openrouterKey)) : theme.colors.gray('(not configured)')}`,
-    `${theme.colors.cyan('▎')} ${theme.colors.white('AgentRouter:')}     ${agentrouterKey ? theme.colors.cyan(maskApiKey(agentrouterKey)) + theme.colors.gray(` · ${agentrouterUrl}`) : theme.colors.gray('(not configured)')}`,
-    `${theme.colors.cyan('▎')} ${theme.colors.white('Active Model:')}    ${theme.colors.brightWhite(currentModel)}`,
-    `${theme.colors.cyan('▎')} ${theme.colors.white('Config:')}          ${theme.colors.gray(configPath)}`,
+    `${theme.colors.cyan('▎')} ${theme.colors.white('Active Provider:')} ${theme.colors.cyan('● ' + activeProviderLabel)}`,
+    `${theme.colors.cyan('▎')} ${theme.colors.white('OpenAI:')}           ${openaiKey ? theme.colors.green(maskApiKey(openaiKey)) : theme.colors.gray('(not configured)')}`,
+    `${theme.colors.cyan('▎')} ${theme.colors.white('OpenRouter:')}       ${openrouterKey ? theme.colors.green(maskApiKey(openrouterKey)) : theme.colors.gray('(not configured)')}`,
+    `${theme.colors.cyan('▎')} ${theme.colors.white('AgentRouter:')}      ${agentrouterKey ? theme.colors.cyan(maskApiKey(agentrouterKey)) + theme.colors.gray(` · ${agentrouterUrl}`) : theme.colors.gray('(not configured)')}`,
+    `${theme.colors.cyan('▎')} ${theme.colors.white('Active Model:')}     ${theme.colors.brightWhite(currentModel)}`,
+    `${theme.colors.cyan('▎')} ${theme.colors.white('Config:')}           ${theme.colors.gray(configPath)}`,
   ];
 
   console.log(theme.card(statusLines, {
@@ -323,10 +366,16 @@ async function handleAuthCommand(options = {}) {
 
   const menuOptions = [
     {
-      label: 'Switch Active Provider (OpenRouter / AgentRouter)',
+      label: 'Switch Active Provider (OpenAI / OpenRouter / AgentRouter)',
       value: 'switch_provider',
       badge: activeProvider.toUpperCase(),
       description: `Toggle active engine (Currently: ${activeProvider.toUpperCase()})`,
+    },
+    {
+      label: openaiKey ? 'Update OpenAI API Key' : 'Configure OpenAI API Key',
+      value: 'update_openai',
+      badge: 'OPENAI',
+      description: 'Enter and save an OpenAI API key (sk-proj-... / sk-...)',
     },
     {
       label: openrouterKey ? 'Update OpenRouter API Key' : 'Configure OpenRouter API Key',
@@ -373,6 +422,12 @@ async function handleAuthCommand(options = {}) {
     const { Select: SelectComponent } = require('./components/select');
     const providerOptions = [
       {
+        label: 'OpenAI (Official GPT-4o / o3-mini API)',
+        value: 'openai',
+        badge: openaiKey ? 'READY' : 'NEEDS KEY',
+        description: 'Connect directly to OpenAI API (api.openai.com)',
+      },
+      {
         label: 'OpenRouter (Multi-model Cloud Gateway)',
         value: 'openrouter',
         badge: openrouterKey ? 'READY' : 'NEEDS KEY',
@@ -386,10 +441,14 @@ async function handleAuthCommand(options = {}) {
       },
     ];
 
+    let defaultIdx = 0;
+    if (activeProvider === 'openrouter') defaultIdx = 1;
+    else if (activeProvider === 'agentrouter') defaultIdx = 2;
+
     const chosenProvider = await SelectComponent({
       label: 'Select Active AI Provider:',
       options: providerOptions,
-      defaultIndex: activeProvider === 'agentrouter' ? 1 : 0,
+      defaultIndex: defaultIdx,
     });
 
     if (chosenProvider) {
@@ -399,6 +458,30 @@ async function handleAuthCommand(options = {}) {
         status: 'online',
         label: `Active AI provider switched to ${theme.colors.cyan(chosenProvider.toUpperCase())}\n`,
       }));
+    }
+  } else if (action === 'update_openai') {
+    console.log('\n' + theme.colors.cyan('▎') + ' ' + theme.colors.white('Paste your OpenAI API key below (https://platform.openai.com/api-keys):'));
+    const inputKey = await promptInput(theme.colors.cyan('  OpenAI API Key: '));
+
+    if (inputKey && inputKey.length >= 8) {
+      saveGlobalConfig({
+        openai_api_key: inputKey,
+        openai_model: currentConfig.openai_model || 'gpt-4o-mini',
+        ai_provider: 'openai',
+      });
+      process.env.OPENAI_API_KEY = inputKey;
+      process.env.CODESENTRY_AI_PROVIDER = 'openai';
+
+      console.log('\n' + formatStatusIndicator({
+        status: 'online',
+        label: `OpenAI API key saved locally to ${theme.colors.gray('~/.codesentry/config.json')}`,
+      }));
+      console.log(theme.colors.gray(`  Key: ${maskApiKey(inputKey)} · Provider: OPENAI · Model: ${currentConfig.openai_model || 'gpt-4o-mini'}\n`));
+    } else {
+      console.log('\n' + formatStatusIndicator({
+        status: 'warning',
+        label: 'No changes made.',
+      }) + '\n');
     }
   } else if (action === 'update_openrouter') {
     console.log('\n' + theme.colors.cyan('▎') + ' ' + theme.colors.white('Paste your OpenRouter API key below (https://openrouter.ai/keys):'));
@@ -508,15 +591,55 @@ async function handleAuthCommand(options = {}) {
       },
     ];
 
+    let effectiveModelOptions = modelOptions;
+    if (activeProvider === 'openai') {
+      effectiveModelOptions = [
+        {
+          label: 'GPT-4o Mini (gpt-4o-mini)',
+          value: 'gpt-4o-mini',
+          badge: 'RECOMMENDED',
+          description: 'Fast, highly capable, and cost-effective default for code analysis & repair',
+        },
+        {
+          label: 'GPT-4o (gpt-4o)',
+          value: 'gpt-4o',
+          badge: 'FLAGSHIP',
+          description: 'High-intelligence flagship model with deep vulnerability reasoning',
+        },
+        {
+          label: 'o3-mini (o3-mini)',
+          value: 'o3-mini',
+          badge: 'REASONING',
+          description: 'Cutting-edge STEM & coding reasoning model with chain-of-thought',
+        },
+        {
+          label: 'GPT-4 Turbo (gpt-4-turbo)',
+          value: 'gpt-4-turbo',
+          badge: 'PAID TIER',
+          description: 'Broad general knowledge and high-precision code repair',
+        },
+        {
+          label: 'Disable AI (Static Analysis Only)',
+          value: 'none',
+          description: 'Run static engines (Ruff, Bandit, Semgrep) without cloud AI',
+        },
+      ];
+    }
+
     const chosenModel = await SelectComponent({
       label: 'Select Active AI Model:',
-      options: modelOptions,
+      options: effectiveModelOptions,
       defaultIndex: 0,
     });
 
     if (chosenModel) {
-      saveGlobalConfig({ openrouter_model: chosenModel });
-      process.env.OPENROUTER_MODEL = chosenModel;
+      if (activeProvider === 'openai') {
+        saveGlobalConfig({ openai_model: chosenModel });
+        process.env.OPENAI_MODEL = chosenModel;
+      } else {
+        saveGlobalConfig({ openrouter_model: chosenModel });
+        process.env.OPENROUTER_MODEL = chosenModel;
+      }
       console.log('\n' + formatStatusIndicator({
         status: 'online',
         label: `Active model saved to global config: ${theme.colors.cyan(chosenModel)}\n`,
@@ -525,10 +648,12 @@ async function handleAuthCommand(options = {}) {
   } else if (action === 'logout') {
     saveGlobalConfig({
       openrouter_api_key: null,
+      openai_api_key: null,
       agentrouter_api_key: null,
       omniroute_api_key: null,
     });
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENAI_API_KEY;
     delete process.env.AGENTROUTER_API_KEY;
     console.log('\n' + formatStatusIndicator({
       status: 'warning',

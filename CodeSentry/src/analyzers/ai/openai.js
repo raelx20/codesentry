@@ -1,13 +1,13 @@
 /**
- * AgentRouter AI Client for CodeSentry
+ * OpenAI Direct AI Client for CodeSentry
  *
- * Provides a resilient, high-speed alternative to OpenRouter for code repair
- * and semantic inspection. Implements the standard CodeSentry AI adapter interface:
- *   - repairFileBatch({ filePath, originalContent, findings, preferredModel })
- *   - chatCompletion({ messages, model, temperature, maxTokens })
- *   - mockMode
+ * Implements native OpenAI API integration for vulnerability triage and code repair:
+ *   - chatCompletion({ messages, model, temperature, maxTokens, timeout })
+ *   - analyze(prompt)
+ *   - repairCode(options)
+ *   - repairFileBatch({ filePath, originalContent, findings, preferredModel, onModelSwitch })
  *
- * Endpoint: https://agentrouter.ai/v1 (or AGENTROUTER_BASE_URL)
+ * Endpoint: https://api.openai.com/v1 (or OPENAI_BASE_URL)
  */
 
 'use strict';
@@ -15,92 +15,87 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const { createAIResponseParser } = require('./parser');
 
-const AGENTROUTER_BASE_URL = process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.ai/v1';
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 
-// 50+ Model Catalog for AgentRouter
-const AGENTROUTER_MODELS = {
-  // Flagship reasoning & coding
-  MINIMAX_M3:             'minimax/minimax-m3',
-  DEEPSEEK_CHAT:          'deepseek/deepseek-chat',
-  DEEPSEEK_R1:            'deepseek/deepseek-r1',
-  QWEN_CODER_32B:         'qwen/qwen-2.5-coder-32b-instruct',
-  LLAMA_3_3_70B:          'meta-llama/llama-3.3-70b-instruct',
-  CLAUDE_SONNET_3_7:      'anthropic/claude-3.7-sonnet',
-  CLAUDE_SONNET_3_5:      'anthropic/claude-3.5-sonnet',
-  GPT_4O:                 'openai/gpt-4o',
-  GEMINI_2_5_PRO:         'google/gemini-2.5-pro',
-  CODESTRAL_2501:         'mistralai/codestral-2501',
-
-  // Fast / Budget models
-  DEEPSEEK_V4_1_FLASH:    'deepseek/deepseek-v4.1-flash',
-  QWEN_3_8_FLASH:         'qwen/qwen3.8-flash',
-  GEMINI_3_8_FLASH:       'google/gemini-3.8-flash',
-  GEMINI_2_FLASH_001:     'google/gemini-2.0-flash-001',
-  GPT_4O_MINI:            'openai/gpt-4o-mini',
-  CLAUDE_3_HAIKU:         'anthropic/claude-3-haiku',
-  MISTRAL_SMALL_24B:      'mistralai/mistral-small-24b-instruct-2501',
-
-  // Free Tier
-  AGENTROUTER_FREE:       'agentrouter/free',
-  GEMINI_2_FLASH_FREE:    'google/gemini-2.0-flash-exp:free',
-  DEEPSEEK_R1_FREE:       'deepseek/deepseek-r1:free',
-  DEEPSEEK_CHAT_FREE:     'deepseek/deepseek-chat:free',
-  LLAMA_3_3_70B_FREE:     'meta-llama/llama-3.3-70b-instruct:free',
-  QWEN_CODER_32B_FREE:    'qwen/qwen-2.5-coder-32b-instruct:free',
+const OPENAI_MODELS = {
+  GPT_4O:         'gpt-4o',
+  GPT_4O_MINI:    'gpt-4o-mini',
+  O3_MINI:        'o3-mini',
+  O1_MINI:        'o1-mini',
+  GPT_4_TURBO:    'gpt-4-turbo',
+  GPT_3_5_TURBO:  'gpt-3.5-turbo',
 };
 
-const AGENTROUTER_FALLBACK_CHAIN = [
-  'minimax/minimax-m3',
-  'deepseek/deepseek-chat',
-  'qwen/qwen-2.5-coder-32b-instruct',
-  'google/gemini-2.0-flash-exp:free',
-  'deepseek/deepseek-chat:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'openai/gpt-4o-mini',
+const OPENAI_FALLBACK_CHAIN = [
+  'gpt-4o-mini',
+  'gpt-4o',
+  'o3-mini',
+  'gpt-4-turbo',
+  'gpt-3.5-turbo',
 ];
 
+const SYSTEM_PROMPT = `You are CodeSentry, an expert DevSecOps code security and quality analyzer.
+Analyze findings and provide actionable remediation in valid JSON format:
+{
+  "explanation": "Clear root cause explanation",
+  "confidence": 0.95,
+  "falsePositiveProbability": 0.05,
+  "impact": "Security or runtime impact",
+  "suggestedFix": "Precise code fix instruction"
+}`;
+
 function selectModel(scanContext = {}) {
-  if (scanContext.model) return scanContext.model;
-  return AGENTROUTER_MODELS.MINIMAX_M3;
+  if (scanContext && scanContext.model) return scanContext.model;
+  return OPENAI_MODELS.GPT_4O_MINI;
 }
 
-class AgentRouterClient {
+class OpenAIClient {
   constructor(options = {}) {
-    this.provider = 'agentrouter';
-    this.apiKey = options.apiKey || process.env.AGENTROUTER_API_KEY || process.env.OPENROUTER_API_KEY || '';
-    this.baseUrl = options.baseUrl || AGENTROUTER_BASE_URL;
+    this.provider = 'openai';
+    this.apiKey = options.apiKey || process.env.OPENAI_API_KEY || '';
+    this.baseUrl = options.baseUrl || OPENAI_BASE_URL;
     this.model = options.model || selectModel(options.scanContext);
     this.maxTokens = options.maxTokens || 4096;
     this.temperature = options.temperature ?? 0.1;
-    this.timeout = options.timeout || 8000;
-    this.mockMode = Boolean(options.mockMode);
+    this.timeout = options.timeout || 10000;
+    this.mockMode = Boolean(options.mockMode || !this.apiKey);
+    this.parser = createAIResponseParser();
   }
 
   async chatCompletion({ messages, model, temperature, maxTokens, timeout }) {
     if (this.mockMode || !this.apiKey) {
       return {
-        content: `// CodeSentry mock AI repair\n${messages[messages.length - 1].content.slice(0, 100)}`,
+        content: `// CodeSentry mock AI repair\n${messages[messages.length - 1]?.content?.slice(0, 100) || ''}`,
         model: model || this.model,
       };
     }
 
     const effectiveModel = model || this.model;
     const effectiveTimeout = timeout || this.timeout;
-    const bodyData = JSON.stringify({
+    const isReasoningModel = /^o[13](?:-|$)/.test(effectiveModel);
+
+    const payload = {
       model: effectiveModel,
       messages,
-      temperature: temperature ?? this.temperature,
-      max_tokens: maxTokens || this.maxTokens,
-    });
+    };
 
+    if (isReasoningModel) {
+      payload.max_completion_tokens = maxTokens || this.maxTokens;
+    } else {
+      payload.max_tokens = maxTokens || this.maxTokens;
+      payload.temperature = temperature ?? this.temperature;
+    }
+
+    const bodyData = JSON.stringify(payload);
     const parsedUrl = new URL(`${this.baseUrl}/chat/completions`);
     const isHttps = parsedUrl.protocol === 'https:';
     const requestFn = isHttps ? https.request : http.request;
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        req.destroy(new Error(`AgentRouter request timed out after ${effectiveTimeout}ms`));
+        req.destroy(new Error(`OpenAI request timed out after ${effectiveTimeout}ms`));
       }, effectiveTimeout);
 
       const req = requestFn(parsedUrl, {
@@ -108,11 +103,7 @@ class AgentRouterClient {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
-          'x-api-key': this.apiKey,
-          'User-Agent': 'claude-cli/1.0 (external, cli)',
-          'anthropic-version': '2023-06-01',
-          'HTTP-Referer': 'https://github.com/codesentry',
-          'X-Title': 'CodeSentry Autonomous Inspection & Repair',
+          'User-Agent': 'CodeSentry-CLI/0.2.1',
           'Content-Length': Buffer.byteLength(bodyData),
         },
       }, (res) => {
@@ -130,10 +121,17 @@ class AgentRouterClient {
                 usage: parsed.usage,
               });
             } catch (err) {
-              reject(new Error(`Failed to parse AgentRouter response: ${err.message}`));
+              reject(new Error(`Failed to parse OpenAI response: ${err.message}`));
             }
           } else {
-            reject(new Error(`AgentRouter HTTP ${res.statusCode}: ${rawData.slice(0, 200)}`));
+            let errorMsg = `OpenAI HTTP ${res.statusCode}: ${rawData.slice(0, 250)}`;
+            try {
+              const errJson = JSON.parse(rawData);
+              if (errJson.error && errJson.error.message) {
+                errorMsg = `OpenAI API Error: ${errJson.error.message} (${errJson.error.code || res.statusCode})`;
+              }
+            } catch {}
+            reject(new Error(errorMsg));
           }
         });
       });
@@ -148,6 +146,47 @@ class AgentRouterClient {
     });
   }
 
+  async analyze(prompt) {
+    if (this.mockMode) {
+      return {
+        explanation: 'Mock OpenAI analysis for finding remediation.',
+        confidence: 0.95,
+        falsePositiveProbability: 0.05,
+        impact: 'Identified potential vulnerability.',
+        suggestedFix: 'Apply parameterized sanitization or environment configuration.',
+        model: this.model,
+      };
+    }
+
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: prompt },
+    ];
+
+    let lastError = null;
+    for (const candidateModel of [this.model, ...OPENAI_FALLBACK_CHAIN]) {
+      try {
+        const res = await this.chatCompletion({ messages, model: candidateModel });
+        const parsed = this.parser.parse(res.content);
+        return {
+          explanation: parsed.explanation || res.content,
+          confidence: parsed.confidence || 0.9,
+          falsePositiveProbability: parsed.falsePositiveProbability || 0.1,
+          impact: parsed.impact || 'Identified potential risk.',
+          suggestedFix: parsed.suggestedFix || 'Sanitize and validate inputs.',
+          model: res.model || candidateModel,
+        };
+      } catch (err) {
+        lastError = err;
+        if (/credit_balance_exhausted|insufficient_quota|quota|billing/i.test(err.message || '')) {
+          break; // Stop immediately: account credit balance is exhausted
+        }
+      }
+    }
+
+    throw lastError || new Error('OpenAI analysis failed across all fallback models');
+  }
+
   async repairFileBatch(options = {}) {
     const file = options.file || options.filePath || '';
     const fileContent = options.fileContent || options.originalContent || '';
@@ -155,7 +194,7 @@ class AgentRouterClient {
     const preferredModel = options.preferredModel;
     const onModelSwitch = options.onModelSwitch;
 
-    const modelsToTry = [preferredModel || this.model, ...AGENTROUTER_FALLBACK_CHAIN].filter(
+    const modelsToTry = [preferredModel || this.model, ...OPENAI_FALLBACK_CHAIN].filter(
       (m, idx, arr) => arr.indexOf(m) === idx
     );
 
@@ -169,9 +208,9 @@ class AgentRouterClient {
       issuesSummary,
       '',
       'Source code of the file:',
-      '\`\`\`',
+      '```',
       fileContent,
-      '\`\`\`',
+      '```',
       '',
       'Please resolve ALL of the above issues in this file simultaneously.',
       'Respond with ONLY a JSON object in this format:',
@@ -179,7 +218,7 @@ class AgentRouterClient {
     ].join('\n');
 
     const messages = [
-      { role: 'system', content: 'You are CodeSentry automated code repair engine. Respond with valid JSON only.' },
+      { role: 'system', content: 'You are CodeSentry automated code repair engine powered by OpenAI. Respond with valid JSON only.' },
       { role: 'user',   content: prompt },
     ];
 
@@ -190,7 +229,7 @@ class AgentRouterClient {
         const res = await this.chatCompletion({
           model: activeModel,
           messages,
-          timeout: 8000,
+          timeout: 12000,
         });
 
         const fixes = this._parseBatchRepairResponse(res.content, fileContent);
@@ -203,9 +242,9 @@ class AgentRouterClient {
         }
       } catch (err) {
         lastError = err;
-        const isQuota = /free-models-per-day|rate limit|quota|credit|balance|insufficient|429|402/i.test(err.message || '');
+        const isQuota = /credit_balance_exhausted|insufficient_quota|quota|billing/i.test(err.message || '');
         if (isQuota) {
-          // Account-level quota / rate limit reached: all models on this tier will fail. Stop immediately.
+          // Account has 0 balance; all OpenAI models will fail identically. Stop immediately.
           break;
         }
         if (onModelSwitch && i + 1 < modelsToTry.length) {
@@ -221,7 +260,7 @@ class AgentRouterClient {
 
     return {
       fixes: [],
-      error: lastError?.message || 'AgentRouter repair unavailable; using offline deterministic rules',
+      error: lastError?.message || 'OpenAI repair unavailable; using offline deterministic rules',
     };
   }
 
@@ -230,7 +269,7 @@ class AgentRouterClient {
       if (!content) return null;
       let cleaned = content.trim();
       cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-      cleaned = cleaned.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '');
+      cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
       const jsonMatch = cleaned.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
       if (!jsonMatch) return null;
 
@@ -270,13 +309,14 @@ class AgentRouterClient {
   }
 }
 
-function createAgentRouterClient(options = {}) {
-  return new AgentRouterClient(options);
+function createOpenAIClient(options = {}) {
+  return new OpenAIClient(options);
 }
 
 module.exports = {
-  createAgentRouterClient,
-  AGENTROUTER_MODELS,
-  AGENTROUTER_FALLBACK_CHAIN,
+  createOpenAIClient,
+  OpenAIClient,
+  OPENAI_MODELS,
+  OPENAI_FALLBACK_CHAIN,
   selectModel,
 };

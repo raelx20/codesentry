@@ -15,6 +15,8 @@ const { createPromptGenerator } = require('../analyzers/ai/prompt');
 const { calculateAutoGrad } = require('./autograd');
 const { evaluateDeployReadiness } = require('./deployguard');
 const { buildRiskGraph } = require('./risk-graph');
+const { runDependencyAudit } = require('../analyzers/sca/dependency-audit');
+const { RepoMap } = require('./repo-map');
 
 registerNormalizer('codesentry', normalizeCodesentry);
 
@@ -72,10 +74,20 @@ async function scan(projectPath, overrides = {}) {
     errors.push({ stage: 'custom-analyzers', message: err.message });
   }
 
+  let scaResult = null;
+  try {
+    scaResult = await runDependencyAudit(discoveryResult, config);
+  } catch (err) {
+    errors.push({ stage: 'dependency-audit', message: err.message });
+  }
+
   if (onProgress) onProgress('processing');
   const allRawResults = [...staticResults];
   if (customResult && customResult.rawResults.length > 0) {
     allRawResults.push(customResult);
+  }
+  if (scaResult && scaResult.rawResults.length > 0) {
+    allRawResults.push(scaResult);
   }
 
   let allFindings = [];
@@ -85,6 +97,18 @@ async function scan(projectPath, overrides = {}) {
       allFindings = allFindings.concat(normalized);
     } catch (err) {
       errors.push({ stage: 'normalize', tool: result.tool, message: err.message });
+    }
+  }
+
+  // Canonicalize finding file paths relative to project root with forward slashes
+  for (const f of allFindings) {
+    if (f && f.file) {
+      let normPath = f.file;
+      if (path.isAbsolute(normPath)) {
+        normPath = path.relative(config.projectPath, normPath) || path.basename(normPath);
+      }
+      normPath = normPath.replace(/^[.\/\\]+/, '').replace(/\\/g, '/');
+      f.file = normPath;
     }
   }
 
@@ -103,10 +127,15 @@ async function scan(projectPath, overrides = {}) {
     filteredFindings = filteredFindings.filter(f => f.category === config.categoryFilter);
   }
 
+  // Build architecture repo-map and software risk graph with impact analysis
+  const repoMap = new RepoMap();
+  repoMap.build(discoveryResult.files, config.projectPath);
+  const riskGraphResult = buildRiskGraph(discoveryResult.files, filteredFindings, config.projectPath);
+
   if (config.aiEnabled && filteredFindings.length > 0) {
     if (onProgress) onProgress('ai_analysis');
     try {
-      filteredFindings = await analyzeWithAI(filteredFindings, discoveryResult, config);
+      filteredFindings = await analyzeWithAI(filteredFindings, discoveryResult, config, repoMap, riskGraphResult.graph);
     } catch (err) {
       errors.push({ stage: 'ai-analysis', message: err.message });
     }
@@ -117,7 +146,6 @@ async function scan(projectPath, overrides = {}) {
   const verdictResult = verdict(scoreResult);
   const autogradResult = calculateAutoGrad(filteredFindings, { targetPath: config.projectPath, projectPath: config.projectPath });
   const deployguardResult = evaluateDeployReadiness(filteredFindings, discoveryResult.files);
-  const riskGraphResult = buildRiskGraph(discoveryResult.files, filteredFindings, config.projectPath);
   const duration = Date.now() - startTime;
 
   return {
@@ -134,16 +162,17 @@ async function scan(projectPath, overrides = {}) {
     autograd: autogradResult,
     deployguard: deployguardResult,
     riskGraph: riskGraphResult,
+    repoMap: repoMap.toSummary(),
     metadata: {
       duration,
       timestamp: new Date().toISOString(),
       errors,
-      analyzerWarnings: collectWarnings(staticResults, customResult),
+      analyzerWarnings: collectWarnings(staticResults, customResult, scaResult),
     },
   };
 }
 
-function collectWarnings(staticResults, customResult) {
+function collectWarnings(staticResults, customResult, scaResult = null) {
   const warnings = [];
   for (const r of staticResults) {
     if (r.warning) warnings.push({ tool: r.tool, warning: r.warning });
@@ -154,10 +183,13 @@ function collectWarnings(staticResults, customResult) {
   if (customResult && customResult.warning) {
     warnings.push({ tool: 'codesentry', warning: customResult.warning });
   }
+  if (scaResult && scaResult.errors && scaResult.errors.length > 0) {
+    for (const e of scaResult.errors) warnings.push({ tool: 'dependency-audit', error: e });
+  }
   return warnings;
 }
 
-async function analyzeWithAI(findings, discoveryResult, config) {
+async function analyzeWithAI(findings, discoveryResult, config, repoMap = null, riskGraph = null) {
   const client = createAIClient({
     provider: config.aiProvider,
     model: config.aiModel,
@@ -176,7 +208,14 @@ async function analyzeWithAI(findings, discoveryResult, config) {
   for (const finding of findingsToAnalyze) {
     try {
       const sourceContext = getSourceContext(finding, discoveryResult);
-      const prompt = promptGenerator.generateFindingAnalysisPrompt(finding, sourceContext);
+      const impactedFiles = riskGraph && typeof riskGraph.getImpactedFiles === 'function'
+        ? riskGraph.getImpactedFiles(finding.file)
+        : [];
+      const fileContext = {
+        repoSummary: repoMap && typeof repoMap.toSummary === 'function' ? repoMap.toSummary() : '',
+        impactedFiles,
+      };
+      const prompt = promptGenerator.generateFindingAnalysisPrompt(finding, sourceContext, fileContext);
       const aiResult = await client.analyze(prompt);
 
       analyzedFindings.push({
@@ -192,6 +231,9 @@ async function analyzeWithAI(findings, discoveryResult, config) {
       });
     } catch (err) {
       analyzedFindings.push(finding);
+      if (/credit_balance_exhausted|insufficient_quota|quota|billing|429/i.test(err.message || '')) {
+        break; // Fast failover: do not repeat failing API requests if account has 0 credits
+      }
     }
   }
 

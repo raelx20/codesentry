@@ -63,7 +63,11 @@ async function runSingleAnalyzer(toolName, analyzer, files, config) {
   return analyzer.run(files, { ...config, projectPath });
 }
 
+const { getAvailabilityCache, clearAvailabilityCache } = require('./availability');
+
 module.exports = {
   runStaticAnalyzers,
   ANALYZERS,
+  getAvailabilityCache,
+  clearAvailabilityCache,
 };

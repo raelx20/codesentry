@@ -33,6 +33,26 @@ describe('Static Analyzers', () => {
       const available = await checkSemgrep();
       assert.equal(typeof available, 'boolean');
     });
+
+    it('should cache availability and return identical result on repeated calls without re-executing', async () => {
+      const { clearAvailabilityCache, getAvailabilityCache } = require('../../src/analyzers/static/availability');
+      clearAvailabilityCache();
+      const first = await checkEslint();
+      const cache = getAvailabilityCache();
+      assert.ok(cache.has('eslint'));
+      assert.equal(cache.get('eslint'), first);
+
+      const second = await checkEslint();
+      assert.equal(second, first);
+    });
+
+    it('should allow clearing the availability cache', async () => {
+      const { clearAvailabilityCache, getAvailabilityCache } = require('../../src/analyzers/static/availability');
+      await checkRuff();
+      assert.ok(getAvailabilityCache().has('ruff'));
+      clearAvailabilityCache();
+      assert.equal(getAvailabilityCache().has('ruff'), false);
+    });
   });
 
   describe('ESLint Runner', () => {

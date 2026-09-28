@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const path = require('node:path');
+const { checkCachedAvailability } = require('./availability');
 
 const execFileAsync = promisify(execFile);
 
@@ -8,16 +9,19 @@ const TOOL_NAME = 'typescript';
 const SUPPORTED_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
 const TIMEOUT_MS = 60000;
 
-async function checkAvailability(projectPath) {
-  try {
-    await execFileAsync('npx', ['tsc', '--version'], {
-      timeout: 10000,
-      cwd: projectPath || process.cwd(),
-    });
-    return true;
-  } catch {
-    return false;
-  }
+async function checkAvailability(projectPath, options = {}) {
+  const cwd = projectPath || process.cwd();
+  return checkCachedAvailability(TOOL_NAME, async () => {
+    try {
+      await execFileAsync('npx', ['tsc', '--version'], {
+        timeout: 10000,
+        cwd,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, { ...options, cacheKey: `${TOOL_NAME}:${cwd}` });
 }
 
 async function runTypescript(files, config = {}) {

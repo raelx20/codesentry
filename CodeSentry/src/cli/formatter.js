@@ -137,9 +137,57 @@ class ScanResultFormatter {
   }
 
   formatFindings(findings, options = {}) {
-    const { limit = 10, showDetails = true } = options;
+    const {
+      limit = 10,
+      showDetails = true,
+      errors = [],
+      skippedCount = 0,
+      failedCount = 0,
+      quotaExceeded = false,
+      hasSkipped = false,
+    } = options;
+
+    const totalSkipped = skippedCount || (hasSkipped ? 1 : 0);
+    const hasErrors = (errors && errors.length > 0) || failedCount > 0;
+    const hasIssuesOrLimits = totalSkipped > 0 || hasErrors || quotaExceeded;
 
     if (!findings || findings.length === 0) {
+      if (hasIssuesOrLimits) {
+        if (!isColorSupported) {
+          const msgs = ['0 active findings reported, but audit is NOT ALL CLEAR:'];
+          if (totalSkipped > 0) msgs.push(`- ${totalSkipped} issue(s) were skipped (limit exceeded or manual review required).`);
+          if (hasErrors) msgs.push(`- Analysis encountered ${errors.length || failedCount} error(s).`);
+          if (quotaExceeded) msgs.push('- API quota or token limit was reached.');
+          return msgs;
+        }
+
+        const warningLines = [];
+        if (totalSkipped > 0) {
+          warningLines.push(colors.yellow(bold(`⚠ ${totalSkipped} issue(s) were skipped during repair/analysis.`)));
+          warningLines.push(`  ${colors.gray('Items could not be auto-resolved (quota/rate limit exceeded or manual review required).')}`);
+        }
+        if (hasErrors) {
+          warningLines.push(colors.red(bold(`✘ Analysis encountered errors during execution.`)));
+          for (const err of errors.slice(0, 3)) {
+            const errStr = typeof err === 'object' ? `[${err.stage || 'engine'}] ${err.message || JSON.stringify(err)}` : String(err);
+            warningLines.push(`  ${colors.gray(`• ${errStr}`)}`);
+          }
+        }
+        if (quotaExceeded) {
+          warningLines.push(colors.magenta(bold(`⚡ Model quota/token limit was reached during analysis.`)));
+        }
+        warningLines.push('');
+        warningLines.push(`${colors.yellow('Status:')} ${colors.brightWhite('NOT ALL CLEAR')} — ${colors.gray('Resolve skipped items or errors before treating codebase as clean.')}`);
+
+        return [
+          card(warningLines, {
+            title: colors.yellow(bold('ATTENTION REQUIRED — NOT ALL CLEAR')),
+            rightTitle: colors.yellow(totalSkipped > 0 ? `${totalSkipped} Skipped` : 'Errors / Incomplete'),
+            width: 76,
+          }),
+        ];
+      }
+
       if (!isColorSupported) return ['No findings detected. Codebase clean.'];
       return [
         card([

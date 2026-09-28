@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const path = require('node:path');
+const { checkCachedAvailability } = require('./availability');
 
 const execFileAsync = promisify(execFile);
 
@@ -8,13 +9,15 @@ const TOOL_NAME = 'bandit';
 const SUPPORTED_EXTENSIONS = new Set(['.py', '.pyw']);
 const TIMEOUT_MS = 30000;
 
-async function checkAvailability() {
-  try {
-    await execFileAsync('bandit', ['--version'], { timeout: 10000 });
-    return true;
-  } catch {
-    return false;
-  }
+async function checkAvailability(options = {}) {
+  return checkCachedAvailability(TOOL_NAME, async () => {
+    try {
+      await execFileAsync('bandit', ['--version'], { timeout: 10000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }, options);
 }
 
 async function runBandit(files, config = {}) {
@@ -29,7 +32,7 @@ async function runBandit(files, config = {}) {
 
   if (targetFiles.length === 0) return result;
 
-  const available = await checkAvailability();
+  const available = await checkAvailability(config);
   if (!available) {
     result.warning = 'Bandit not available. Install with: pip install bandit';
     return result;

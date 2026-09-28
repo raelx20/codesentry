@@ -3,12 +3,14 @@
  *
  * Implements:
  * 1. CodeTwin System Model: Extracts architectural components (Routes, Controllers, DB Sinks, Shell Sinks, AI Calls).
- * 2. AttackGraph Correlation: Correlates vulnerabilities across components to identify exploitable multi-step attack paths.
- * 3. Visualization: Produces ASCII/ANSI terminal graphs and Mermaid diagrams for markdown reports.
+ * 2. Dependency & Impact Graph: Traces imports/calls across components to evaluate blast radius and breaking change impact.
+ * 3. AttackGraph Correlation: Correlates vulnerabilities across components to identify exploitable multi-step attack paths.
+ * 4. Visualization: Produces ASCII/ANSI terminal graphs and Mermaid diagrams for markdown reports.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { extractComponents } = require('./repo-map');
 
 class SoftwareRiskGraph {
   constructor() {
@@ -25,7 +27,7 @@ class SoftwareRiskGraph {
     this.edges = [];
     this.attackPaths = [];
 
-    // 1. Discover architectural component nodes
+    // 1. Discover architectural component nodes & dependency edges
     for (const relPath of files) {
       const fullPath = path.isAbsolute(relPath) ? relPath : path.join(projectPath, relPath);
       let content = '';
@@ -38,6 +40,7 @@ class SoftwareRiskGraph {
       }
 
       this._extractComponents(relPath, content);
+      this._extractImportEdges(relPath, content, files);
     }
 
     // 2. Correlate findings with graph nodes
@@ -55,9 +58,9 @@ class SoftwareRiskGraph {
       });
 
       // Link to file component if in same file
-      const normFindingFile = String(f.file || '').replace(/\\/g, '/').toLowerCase();
+      const normFindingFile = this._normalizeFilePath(f.file);
       for (const [nodeId, node] of this.nodes.entries()) {
-        const normNodeFile = String(node.file || '').replace(/\\/g, '/').toLowerCase();
+        const normNodeFile = this._normalizeFilePath(node.file);
         if (normNodeFile === normFindingFile && node.type !== 'VULNERABILITY') {
           if (Math.abs(node.line - (f.line || 1)) < 25) {
             this.edges.push({
@@ -82,65 +85,133 @@ class SoftwareRiskGraph {
     };
   }
 
+  _normalizeFilePath(p) {
+    return String(p || '').replace(/\\/g, '/').toLowerCase();
+  }
+
   _extractComponents(file, content) {
-    const lines = content.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const lineNum = i + 1;
-
-      // Detect HTTP Entrypoints
-      const routeMatch = line.match(/(?:app|router)\.(get|post|put|delete|patch)\(\s*['"]([^'"]+)['"]/i) ||
-                         line.match(/@(?:app|blueprint|router)\.route\(\s*['"]([^'"]+)['"]/i);
-      if (routeMatch) {
-        const routePath = routeMatch[2] || routeMatch[1];
-        const method = routeMatch[1].toUpperCase();
-        const id = `entry-${file}-${lineNum}`;
-        this.nodes.set(id, {
-          id,
-          type: 'ENTRYPOINT',
-          label: `${method} ${routePath}`,
-          file,
-          line: lineNum,
-        });
-      }
-
-      // Detect Database Sinks
-      if (/db\.(?:query|execute|run|collection|find)|cursor\.execute|Session\.query/i.test(line)) {
-        const id = `dbsink-${file}-${lineNum}`;
-        this.nodes.set(id, {
-          id,
-          type: 'DATA_SINK',
-          label: 'Database Query Sink',
-          file,
-          line: lineNum,
-        });
-      }
-
-      // Detect Shell / Execution Sinks
-      if (/child_process|exec\(|eval\(|subprocess\.(?:run|Popen|call)/i.test(line)) {
-        const id = `execsink-${file}-${lineNum}`;
-        this.nodes.set(id, {
-          id,
-          type: 'EXEC_SINK',
-          label: 'Dynamic Code/Shell Sink',
-          file,
-          line: lineNum,
-        });
-      }
-
-      // Detect AI / LLM Invocations
-      if (/openai\.|anthropic\.|openrouter|completion|chat\.completions/i.test(line)) {
-        const id = `aisink-${file}-${lineNum}`;
-        this.nodes.set(id, {
-          id,
-          type: 'AI_SINK',
-          label: 'LLM Prompt Call',
-          file,
-          line: lineNum,
-        });
+    const components = extractComponents(file, content);
+    for (const c of components) {
+      if (c.type !== 'EXPORTS') {
+        this.nodes.set(c.id, c);
       }
     }
+  }
+
+  _extractImportEdges(file, content, allFiles) {
+    const lines = content.split('\n');
+    const isPy = (file || '').endsWith('.py') || (file || '').endsWith('.pyw');
+
+    for (const line of lines) {
+      if (!isPy) {
+        // JavaScript / TypeScript imports
+        const jsMatch = line.match(/(?:require\s*\(\s*['"]([^'"]+)['"]\s*\)|from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\))/);
+        if (jsMatch) {
+          const importStr = jsMatch[1] || jsMatch[2] || jsMatch[3] || jsMatch[4];
+          if (importStr && (importStr.startsWith('.') || importStr.startsWith('/'))) {
+            const resolved = this._resolveFile(file, importStr, allFiles);
+            if (resolved && resolved !== file) {
+              this.edges.push({
+                from: file,
+                to: resolved,
+                type: 'IMPORTS',
+                label: 'imports',
+              });
+            }
+          }
+        }
+      } else {
+        // Python imports
+        const pyMatch = line.match(/(?:from\s+([a-zA-Z0-9_.]+)\s+import|import\s+([a-zA-Z0-9_.]+))/);
+        if (pyMatch) {
+          const mod = pyMatch[1] || pyMatch[2];
+          if (mod) {
+            const resolved = this._resolvePythonModule(file, mod, allFiles);
+            if (resolved && resolved !== file) {
+              this.edges.push({
+                from: file,
+                to: resolved,
+                type: 'IMPORTS',
+                label: 'imports',
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  _resolveFile(callerFile, importStr, allFiles) {
+    const callerDir = path.dirname(callerFile);
+    const candidateBase = path.normalize(path.join(callerDir, importStr)).replace(/\\/g, '/');
+
+    const normFiles = allFiles.map(f => ({ orig: f, norm: this._normalizeFilePath(f) }));
+    const exts = ['', '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '/index.js', '/index.ts'];
+
+    for (const ext of exts) {
+      const probe = this._normalizeFilePath(candidateBase + ext);
+      const match = normFiles.find(f => f.norm === probe);
+      if (match) return match.orig;
+    }
+
+    // Fallback: match by filename
+    const baseName = this._normalizeFilePath(path.basename(importStr));
+    const byBase = normFiles.find(f => f.norm.endsWith('/' + baseName) || f.norm === baseName);
+    return byBase ? byBase.orig : null;
+  }
+
+  _resolvePythonModule(callerFile, modStr, allFiles) {
+    const callerDir = path.dirname(callerFile);
+    const modRel = modStr.replace(/^\.+/, '').replace(/\./g, '/');
+    const normFiles = allFiles.map(f => ({ orig: f, norm: this._normalizeFilePath(f) }));
+
+    const candidate = path.normalize(path.join(callerDir, modRel)).replace(/\\/g, '/');
+    const exts = ['.py', '.pyw', '/__init__.py'];
+
+    for (const ext of exts) {
+      const probe = this._normalizeFilePath(candidate + ext);
+      const match = normFiles.find(f => f.norm === probe);
+      if (match) return match.orig;
+    }
+
+    const baseName = this._normalizeFilePath(path.basename(modRel) + '.py');
+    const byBase = normFiles.find(f => f.norm.endsWith('/' + baseName) || f.norm === baseName);
+    return byBase ? byBase.orig : null;
+  }
+
+  /**
+   * Performs BFS over IMPORTS edges to return all files that directly
+   * or transitively import or depend on the given target file.
+   *
+   * @param {string} targetFile - File to check for breaking-change impact
+   * @returns {string[]} Array of impacted file paths
+   */
+  getImpactedFiles(targetFile) {
+    if (!targetFile) return [];
+    const normTarget = this._normalizeFilePath(targetFile);
+    const impacted = new Set();
+    const queue = [normTarget];
+    const visited = new Set([normTarget]);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+
+      for (const edge of this.edges) {
+        if (edge.type === 'IMPORTS') {
+          const normTo = this._normalizeFilePath(edge.to);
+          const normFrom = this._normalizeFilePath(edge.from);
+
+          // If edge.to is the current file, then edge.from depends on it
+          if (normTo === current && !visited.has(normFrom)) {
+            visited.add(normFrom);
+            impacted.add(edge.from);
+            queue.push(normFrom);
+          }
+        }
+      }
+    }
+
+    return Array.from(impacted);
   }
 
   _traceAttackPaths() {
@@ -149,15 +220,15 @@ class SoftwareRiskGraph {
     const vulns = Array.from(this.nodes.values()).filter((n) => n.type === 'VULNERABILITY');
 
     for (const ep of entrypoints) {
-      const normEpFile = String(ep.file || '').replace(/\\/g, '/').toLowerCase();
+      const normEpFile = this._normalizeFilePath(ep.file);
       // Find vulns in the same file or connected components
       const correlatedVulns = vulns.filter((v) => {
-        const normVulnFile = String(v.file || '').replace(/\\/g, '/').toLowerCase();
+        const normVulnFile = this._normalizeFilePath(v.file);
         return normVulnFile === normEpFile || (v.severity === 'BLOCKER' || v.severity === 'HIGH');
       });
 
       for (const vuln of correlatedVulns) {
-        const normVulnFile = String(vuln.file || '').replace(/\\/g, '/').toLowerCase();
+        const normVulnFile = this._normalizeFilePath(vuln.file);
         if (normVulnFile === normEpFile) {
           this.attackPaths.push({
             id: `path-${ep.id}-${vuln.id}`,
@@ -239,6 +310,7 @@ function buildRiskGraph(files = [], findings = [], projectPath = '') {
     summary: graph.build(files, findings, projectPath),
     terminalOutput: graph.formatTerminal(),
     mermaidOutput: graph.toMermaid(),
+    getImpactedFiles: (file) => graph.getImpactedFiles(file),
   };
 }
 
